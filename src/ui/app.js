@@ -4,6 +4,7 @@
 import { SIZE_MODULES, getSizeModule, defaultSizeModule } from '../sizes/index.js';
 import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
+import { createGuide } from './guide.js';
 import { stateFromGeom, isSolved } from '../core/cube2.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -34,6 +35,7 @@ export function initApp() {
   let captureIndex = 0;
   let scanner = null;
   let renderer = null;
+  let guide = null;
   let solution = null;
   let stepIndex = 0;
   let animating = false;
@@ -89,6 +91,14 @@ export function initApp() {
       li.dataset.done = order.indexOf(name) > i ? 'true' : 'false';
     });
     if (name === 'review') refreshNet(), validateNow();
+    if (guide) {
+      if (name === 'capture') {
+        guide.start();
+        guide.showFace(mod.current.faceOrder[captureIndex]);
+      } else {
+        guide.stop();
+      }
+    }
   }
 
   // ---- reticle ----
@@ -131,7 +141,21 @@ export function initApp() {
     const f = mod.current.faceOrder[captureIndex];
     $('#capture-face-name').textContent = mod.current.faceLabels[f];
     $('#capture-face-hint').textContent = SCAN_GUIDE[f] || '';
+    if (guide) guide.showFace(f);
     refreshFaceProgress();
+  }
+
+  // The animated guide cube demonstrates how to turn the cube to show each face.
+  function ensureGuide() {
+    if (guide) return;
+    try {
+      guide = createGuide($('#guide-view'), {
+        colorHex: mod.current.colorHex,
+        reducedMotion: REDUCED_MOTION,
+      });
+    } catch (err) {
+      guide = null; // WebGL unavailable: text guidance still covers it.
+    }
   }
 
   // ---- palette ----
@@ -447,8 +471,10 @@ export function initApp() {
   buildFaceProgress();
   buildPalette();
   buildNet();
+  ensureGuide();
   updateCaptureTarget();
   showScreen('capture');
+  if (guide) guide.start();
   startCamera();
 
   // expose a tiny hook for the e2e test to drive deterministically.
