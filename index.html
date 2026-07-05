@@ -75,6 +75,10 @@
                   <span id="capture-face-name">Front</span>
                 </span>
                 <span class="capture-target__hint" id="capture-face-hint"></span>
+                <div class="scan-readback" id="scan-readback" hidden aria-hidden="true">
+                  <span class="scan-readback__label">Scanned</span>
+                  <div class="scan-readback__grid" id="scan-readback-grid"></div>
+                </div>
               </div>
             </div>
 
@@ -83,6 +87,10 @@
             <div class="capture-actions">
               <button class="btn btn--primary" id="btn-capture">Capture face</button>
               <button class="btn" id="btn-skip-face">Skip</button>
+            </div>
+            <div class="mirror-nudge" id="mirror-nudge" hidden role="note">
+              <span>Using a selfie camera? Tap <b>Mirror</b> to flip the turn directions.</span>
+              <button class="mirror-nudge__x" id="btn-mirror-nudge-dismiss" type="button" aria-label="Dismiss selfie camera hint">×</button>
             </div>
             <div class="capture-actions">
               <button class="btn" id="btn-flash" aria-pressed="false" hidden>Flash off</button>

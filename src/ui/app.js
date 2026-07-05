@@ -34,6 +34,25 @@ export function initApp() {
   // the preview flips left-for-right, so the guide and the turn wording flip to
   // match. Auto-detected from the camera when possible; also user-toggleable.
   let mirror = false;
+  // One-time selfie-camera nudge: shown at most once per session, only when the
+  // camera reports no facingMode (auto-detect can't decide) and mirror wasn't
+  // already turned on. Helps people discover the Mirror toggle without nagging.
+  let mirrorNudgeSpent = false;
+
+  // A short haptic tick on discrete, user-initiated confirmations (a face
+  // captured, the set completed). Deliberately never fired by the looping guide,
+  // so it confirms rather than nags. Suppressed under reduced-motion (a proxy
+  // for "keep it calm") and guarded for browsers without the Vibration API.
+  function haptic(pattern) {
+    if (REDUCED_MOTION) return;
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(pattern);
+      }
+    } catch {
+      /* vibration unsupported / blocked — non-essential, ignore */
+    }
+  }
 
   // The active size module owns its own scan path (ordered faces + the single
   // whole-cube turn between each). The net layout and validation still use the
@@ -151,8 +170,33 @@ export function initApp() {
     $('#capture-face-name').textContent = mod.current.faceLabels[f];
     $('#capture-face-swatch').style.background = mod.current.colorHex[mod.current.faceColor[f]];
     $('#capture-face-hint').textContent = text;
+    renderReadback(f);
     if (guide) guide.showStep(captureIndex);
     refreshFaceProgress();
+  }
+
+  // Immediate per-face feedback: the moment a face is scanned, mirror the colors
+  // the camera actually read back as a compact grid in the capture card, so a
+  // misread is obvious right here — not only later at Verify. Reflects whatever
+  // is stored for the target face, so jumping between chips shows each reading.
+  function renderReadback(f) {
+    const wrap = $('#scan-readback');
+    const grid = $('#scan-readback-grid');
+    if (!wrap || !grid) return;
+    if (!isFaceFilled(f)) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    const n = mod.current.gridN;
+    grid.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
+    if (grid.children.length !== n * n) {
+      grid.innerHTML = '';
+      for (let i = 0; i < n * n; i++) grid.appendChild(el('i'));
+    }
+    [...grid.children].forEach((cell, i) => {
+      cell.style.background = mod.current.colorHex[faces[f][i]] || 'transparent';
+    });
   }
 
   // The animated guide cube demonstrates how to turn the cube to show each face.
@@ -204,6 +248,21 @@ export function initApp() {
     }
     if (guide) guide.setMirror(mirror);
     updateCaptureTarget();
+  }
+
+  // The selfie-camera nudge (see mirrorNudgeSpent). Shown at most once, and never
+  // when mirror is already on or the camera told us its facingMode.
+  function maybeShowMirrorNudge(facing) {
+    if (mirrorNudgeSpent || mirror || facing) return;
+    const n = $('#mirror-nudge');
+    if (!n) return;
+    n.hidden = false;
+    mirrorNudgeSpent = true;
+  }
+  function dismissMirrorNudge() {
+    mirrorNudgeSpent = true;
+    const n = $('#mirror-nudge');
+    if (n) n.hidden = true;
   }
 
   // ---- palette ----
@@ -325,7 +384,13 @@ export function initApp() {
   });
 
   const mirrorBtn = $('#btn-mirror');
-  if (mirrorBtn) mirrorBtn.addEventListener('click', () => setMirror(!mirror));
+  if (mirrorBtn)
+    mirrorBtn.addEventListener('click', () => {
+      dismissMirrorNudge();
+      setMirror(!mirror);
+    });
+  const nudgeDismiss = $('#btn-mirror-nudge-dismiss');
+  if (nudgeDismiss) nudgeDismiss.addEventListener('click', dismissMirrorNudge);
 
   async function startCamera() {
     scanner = createScanner({ video, gridN: mod.current.gridN });
@@ -345,6 +410,10 @@ export function initApp() {
       const fm = scanner.facingMode();
       if (fm === 'user') setMirror(true);
       else if (fm === 'environment') setMirror(false);
+      // When the camera won't report which way it faces, auto-detect can't
+      // decide — surface the one-time Mirror hint so selfie users aren't stuck
+      // with reversed turn directions.
+      maybeShowMirrorNudge(fm);
     }
     updateFlashButton();
   }
@@ -356,6 +425,7 @@ export function initApp() {
     const order = scanFaces();
     const f = order[captureIndex];
     faces[f] = samples.map((rgb) => mod.current.classifyColor(rgb));
+    dismissMirrorNudge();
     // advance to next unfilled face
     let next = (captureIndex + 1) % order.length;
     for (let i = 0; i < order.length; i++) {
@@ -364,7 +434,12 @@ export function initApp() {
     }
     captureIndex = next;
     updateCaptureTarget();
-    if (allFilled()) goReview();
+    if (allFilled()) {
+      haptic([16, 60, 28]); // set complete — a distinct double tick
+      goReview();
+    } else {
+      haptic(14); // one face locked in — a single crisp tick
+    }
   });
 
   $('#btn-skip-face').addEventListener('click', () => {

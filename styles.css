@@ -337,6 +337,31 @@ h1 {
 }
 .capture-target__hint { font-size: 13px; color: var(--ink-dim); }
 
+/* Immediate read-back of the colors the scan actually captured for this face —
+   a small instrument grid so misreads are caught at scan time, not just Verify. */
+.scan-readback { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.scan-readback__label {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.scan-readback__grid {
+  display: grid;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--slate);
+}
+.scan-readback__grid i {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
 .face-progress { display: flex; gap: 8px; flex-wrap: wrap; }
 .face-chip {
   display: flex;
@@ -369,6 +394,39 @@ h1 {
   background: rgba(43, 127, 255, 0.14);
   font-weight: 600;
 }
+/* One-time selfie-camera hint. Restrained: a thin blue-keyed note that points at
+   the Mirror control, dismissible, and shown at most once per session. */
+.mirror-nudge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+  background: rgba(43, 127, 255, 0.08);
+  border: 1px solid var(--line-2);
+  border-left: 2px solid var(--c-blue);
+  border-radius: 8px;
+}
+.mirror-nudge b { color: var(--ink); font-weight: 600; }
+.mirror-nudge__x {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mirror-nudge__x:hover { color: var(--ink); border-color: var(--line-2); }
+
 .fineprint { font-size: 12.5px; color: var(--ink-faint); margin: 0; }
 
 /* ---------- review / net ---------- */
