@@ -1,102 +1,28 @@
 // guide.js — the scan turn-guide: an animated, engineering-style demonstration
 // of EXACTLY how to rotate the physical cube between scans.
 //
-// The core idea: SCAN_SEQUENCE orders the six faces so that each consecutive
-// step differs from the previous one by ONE simple whole-cube turn — a 90° yaw
-// or a 90°/180° tilt — expressed in the camera's frame (+x right, +y up,
-// +z toward the camera). Each step's target orientation is COMPOSED from that
-// turn, the demo cube animates from the previous step's orientation along that
-// exact turn, and the curved arrow, the rotation axis, and the instruction text
-// are all derived from the same turn spec. The animation IS the instruction —
-// they cannot disagree.
+// The scan path itself (which faces, in what order, and the single whole-cube
+// turn between each) is owned by the active SizeModule as `scanSequence` (see
+// sizes/size2x2.js). This module is the *renderer* for that path: for each step
+// it composes the target orientation from the declared turn, animates the demo
+// cube from the previous step's orientation along that exact turn, and derives
+// the curved arrow, the rotation axis, and the traveling marker from the same
+// turn. The animation IS the instruction — they cannot disagree.
 //
-// Sequence:  F → R → B → L (three 90° left yaws to go around the sides),
-//            then U (tilt forward 90°), then D (keep tipping — a 180° flip).
+// Features layered on top of the base demonstration:
+//   • onArrive() fires the instant a turn completes and the face locks in, so
+//     the UI can pulse the camera reticle in sync ("arrival tick").
+//   • The 180° flip draws its arc progressively as the cube rolls, a stronger
+//     "keep going" cue than a static half-circle.
+//   • setMirror() reflects the whole demonstration left-for-right to match a
+//     mirrored (selfie) camera preview, so guide and preview always agree.
 //
 // Honors prefers-reduced-motion by snapping to the target pose with a static
 // arrow instead of looping the demonstration.
 
 import * as THREE from '../../vendor/three.module.js';
-import { FACES, rotateVec } from '../core/geometry.js';
-import { SOLVED, geomFromState } from '../core/cube2.js';
 
 const AXIS_INDEX = { x: 0, y: 1, z: 2 };
-const FACE_WORDS = { U: 'top', D: 'bottom', F: 'front', B: 'back', R: 'right', L: 'left' };
-
-// Whole-cube turns in the camera frame, signed by the right-hand rule about
-// the positive axis. -90° about +y swings the front face to the left;
-// +90° about +x rolls the top face toward the camera.
-const YAW_LEFT_90 = { axis: 'y', deg: -90 };
-const TILT_FWD_90 = { axis: 'x', deg: 90 };
-const TILT_FWD_180 = { axis: 'x', deg: 180 };
-
-// Derive the short technical label and the plain-language instruction from the
-// actual turn, so the words come from the same source of truth as the motion.
-function instructionFor(turn, face) {
-  const word = FACE_WORDS[face];
-  if (!turn) {
-    return {
-      label: 'START',
-      text: 'Hold the cube with White on top and Green toward the camera.',
-    };
-  }
-  const amount = Math.abs(turn.deg);
-  if (turn.axis === 'y') {
-    const dir = turn.deg < 0 ? 'left' : 'right';
-    return {
-      label: `TURN ${dir.toUpperCase()} · ${amount}°`,
-      text: `Turn the whole cube ${amount}° to the ${dir} — the ${word} face swings around to the camera.`,
-    };
-  }
-  if (amount === 180) {
-    return {
-      label: 'FLIP FORWARD · 180°',
-      text: `Keep tipping forward — a full half-turn — so the ${word} face rolls up to the camera.`,
-    };
-  }
-  const fwd = turn.deg > 0;
-  return {
-    label: `TILT ${fwd ? 'FORWARD' : 'BACK'} · ${amount}°`,
-    text: fwd
-      ? `Tip the cube ${amount}° forward, top toward the camera — the ${word} face rolls down into view.`
-      : `Tip the cube ${amount}° back — the ${word} face rolls into view.`,
-  };
-}
-
-const RAW_SEQUENCE = [
-  { face: 'F', turn: null },
-  { face: 'R', turn: YAW_LEFT_90 },
-  { face: 'B', turn: YAW_LEFT_90 },
-  { face: 'L', turn: YAW_LEFT_90 },
-  { face: 'U', turn: TILT_FWD_90 },
-  { face: 'D', turn: TILT_FWD_180 },
-];
-
-export const SCAN_SEQUENCE = RAW_SEQUENCE.map((s) => ({ ...s, ...instructionFor(s.turn, s.face) }));
-
-// Self-check with exact integer math (geometry.js is the oracle): accumulating
-// the declared turns must present each step's face to the camera (+z). Throws
-// at module load if the sequence and the turns ever drift apart.
-(function verifySequence() {
-  const world = {};
-  for (const [f, spec] of Object.entries(FACES)) {
-    const v = [0, 0, 0];
-    v[spec.axis] = spec.sign;
-    world[f] = v;
-  }
-  for (const step of RAW_SEQUENCE) {
-    if (step.turn) {
-      const quarters = Math.round(step.turn.deg / 90);
-      for (const f of Object.keys(world)) {
-        world[f] = rotateVec(world[f], AXIS_INDEX[step.turn.axis], quarters);
-      }
-    }
-    const w = world[step.face];
-    if (!(w[0] === 0 && w[1] === 0 && w[2] === 1)) {
-      throw new Error(`scan sequence broken: step ${step.face} does not face the camera`);
-    }
-  }
-})();
 
 function easeInOut(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -105,7 +31,13 @@ function easeInOut(t) {
 export function createGuide(container, opts) {
   const colorHex = opts.colorHex;
   const reducedMotion = !!opts.reducedMotion;
+  const onArrive = typeof opts.onArrive === 'function' ? opts.onArrive : () => {};
   const cubie = 0.94;
+
+  // The demo cube geometry is built from the size module's solved state so the
+  // guide always matches the cube being scanned.
+  const SOLVED = opts.solvedState;
+  const geomFromState = opts.geomFromState;
 
   const scene = new THREE.Scene();
   // The camera sits a little above and looks down ~17°. The stage (below) tips
@@ -130,7 +62,9 @@ export function createGuide(container, opts) {
   // The stage carries a constant, gentle presentation tilt (peek at the top and
   // the right side so the pose reads as 3D). Everything inside the stage lives
   // in the cube's own frame, so the arrows and the motion stay geometrically
-  // locked together no matter the tilt.
+  // locked together no matter the tilt. A left-for-right mirror (for selfie
+  // cameras) is applied as a negative x-scale on this same group, so the cube,
+  // the arrows and the traveling marker all reflect together and stay coherent.
   const stage = new THREE.Group();
   const TILT = new THREE.Quaternion()
     .setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.33)
@@ -139,9 +73,15 @@ export function createGuide(container, opts) {
   scene.add(stage);
 
   // ---- the demonstration cube (solved; built from the geometry oracle) ----
+  // Materials are DoubleSide so the cube still renders correctly when the stage
+  // is mirrored (a negative scale flips triangle winding).
   const cube = new THREE.Group();
   stage.add(cube);
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0b0d11, roughness: 0.55 });
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0x0b0d11,
+    roughness: 0.55,
+    side: THREE.DoubleSide,
+  });
   const stickerMat = {};
   const mat = (c) =>
     (stickerMat[c] ||= new THREE.MeshStandardMaterial({
@@ -149,6 +89,7 @@ export function createGuide(container, opts) {
       roughness: 0.4,
       emissive: new THREE.Color(colorHex[c]),
       emissiveIntensity: 0.12,
+      side: THREE.DoubleSide,
     }));
   for (const c of geomFromState(SOLVED)) {
     const g = new THREE.Group();
@@ -171,41 +112,50 @@ export function createGuide(container, opts) {
     opacity: 0.95,
     side: THREE.DoubleSide,
   });
+  // Faint "path track" for the progressive flip: the whole arc drawn quietly so
+  // the eye knows where the sweep is headed before the bright arc gets there.
+  const matGhost = new THREE.MeshBasicMaterial({
+    color: 0xf4f6f8,
+    transparent: true,
+    opacity: 0.13,
+    side: THREE.DoubleSide,
+  });
   const matAxis = new THREE.MeshBasicMaterial({ color: 0xaab4c0, transparent: true, opacity: 0.38 });
   const matDot = new THREE.MeshBasicMaterial({ color: 0x2b7fff, transparent: true, opacity: 1 });
 
-  // Build a curved arrow along pointFn(t), t in [0,1], head at t = 1.
-  // Arrowheads are flat triangles lying IN the rotation plane (like a technical
-  // drawing) — a cone pointing away from the camera would collapse to a dot.
-  function buildArrow(pointFn, axis, doubleHead) {
-    const g = new THREE.Group();
+  // A tube following pointFn(t), t in [0,1].
+  function tubeMesh(pointFn, material) {
     const pts = [];
     for (let i = 0; i <= 64; i++) pts.push(pointFn(i / 64));
     const curve = new THREE.CatmullRomCurve3(pts);
-    g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 96, 0.04, 12), matInk));
-    // tail tick: a small round terminal where the sweep begins
-    const tail = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), matInk);
-    tail.position.copy(pointFn(0));
-    g.add(tail);
+    return new THREE.Mesh(new THREE.TubeGeometry(curve, 96, 0.04, 12), material);
+  }
+
+  // The three points of a flat arrowhead lying IN the rotation plane at t (a
+  // cone pointing away from the camera would collapse to a dot). tip leads along
+  // the tangent; b1/b2 splay across it.
+  function headPoints(pointFn, axis, t) {
+    const p = pointFn(t);
+    const tangent = pointFn(Math.min(1, t + 0.01))
+      .clone()
+      .sub(pointFn(Math.max(0, t - 0.01)))
+      .normalize();
     const planeNormal = new THREE.Vector3();
     planeNormal.setComponent(AXIS_INDEX[axis], 1);
-    const headAt = (t) => {
-      const p = pointFn(t);
-      const tangent = pointFn(Math.min(1, t + 0.01))
-        .clone()
-        .sub(pointFn(Math.max(0, t - 0.01)))
-        .normalize();
-      const across = new THREE.Vector3().crossVectors(planeNormal, tangent).normalize();
-      const tip = p.clone().add(tangent.clone().multiplyScalar(0.3));
-      const b1 = p.clone().add(across.clone().multiplyScalar(0.125));
-      const b2 = p.clone().sub(across.clone().multiplyScalar(0.125));
-      const geo = new THREE.BufferGeometry().setFromPoints([tip, b1, b2]);
-      geo.computeVertexNormals();
-      g.add(new THREE.Mesh(geo, matInk));
-    };
-    headAt(1);
-    if (doubleHead) headAt(0.88); // a second chevron reads as "keep going — half turn"
-    return g;
+    const across = new THREE.Vector3().crossVectors(planeNormal, tangent).normalize();
+    const tip = p.clone().add(tangent.clone().multiplyScalar(0.3));
+    const b1 = p.clone().add(across.clone().multiplyScalar(0.125));
+    const b2 = p.clone().sub(across.clone().multiplyScalar(0.125));
+    return [tip, b1, b2];
+  }
+  function headMesh(pointFn, axis, t, material) {
+    const geo = new THREE.BufferGeometry().setFromPoints(headPoints(pointFn, axis, t));
+    geo.computeVertexNormals();
+    return new THREE.Mesh(geo, material);
+  }
+  function updateHead(mesh, pointFn, axis, t) {
+    mesh.geometry.setFromPoints(headPoints(pointFn, axis, t));
+    mesh.geometry.attributes.position.needsUpdate = true;
   }
 
   // A thin rod through the cube marking the rotation axis. axis: 'x' | 'y'.
@@ -224,42 +174,61 @@ export function createGuide(container, opts) {
 
   const deg2rad = (d) => (d * Math.PI) / 180;
   // Yaw ring: a halo above the cube sweeping the way the front face travels
-  // (from the right, across the front, off to the left). Head at the far end.
-  // Sweeps across the visible front of the ring, right → left, so the on-screen
-  // motion cue matches "turn left" wherever you look at it.
+  // (from the right, across the front, off to the left). Sweeps across the
+  // visible front of the ring, right → left, so the on-screen motion cue
+  // matches "turn left" wherever you look at it.
   const yawPoint = (t) => {
     const a = deg2rad(-30 + t * 180);
     return new THREE.Vector3(1.18 * Math.cos(a), 1.3, 1.18 * Math.sin(a));
   };
   // Tilt arc: a large meridian sweep that wraps OVER the cube like a wheel
   // rolling toward the camera — from behind the top, over it, down the front.
-  // Offset a little toward the cube's right half so it doesn't cover the
-  // center of the presented face.
   const tiltPoint = (t) => {
     const a = deg2rad(-35 + t * 150);
     return new THREE.Vector3(0.62, 1.42 * Math.cos(a), 1.42 * Math.sin(a));
   };
-  // Flip arc: same axis, but sweeping all the way under — a half turn.
+  // Flip arc: same axis, sweeping all the way under — a half turn.
   const flipPoint = (t) => {
     const a = deg2rad(-25 + t * 225);
     return new THREE.Vector3(0.62, 1.48 * Math.cos(a), 1.48 * Math.sin(a));
   };
 
-  function makeIndicator(pointFn, axis, doubleHead) {
+  // kind: 'static' (full arc always drawn) | 'progressive' (arc grows with the
+  // turn). Both carry a rotation-axis rod and a traveling marker.
+  function makeIndicator(pointFn, axis, kind) {
     const group = new THREE.Group();
-    group.add(buildArrow(pointFn, axis, doubleHead));
+    const tail = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), matInk);
+    tail.position.copy(pointFn(0));
+    group.add(tail);
     group.add(buildAxisRod(axis));
     const dot = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 12), matDot);
     dot.visible = false;
     group.add(dot);
+
+    let obj;
+    if (kind === 'progressive') {
+      group.add(tubeMesh(pointFn, matGhost)); // faint full-path track
+      const bright = tubeMesh(pointFn, matInk);
+      bright.geometry.setDrawRange(0, 0);
+      group.add(bright);
+      const head = headMesh(pointFn, axis, 1, matInk);
+      const chev = headMesh(pointFn, axis, 0.87, matInk); // trailing "keep going" chevron
+      group.add(head, chev);
+      obj = { group, pointFn, kind, dot, axis, bright, fullCount: bright.geometry.index.count, head, chev };
+    } else {
+      group.add(tubeMesh(pointFn, matInk));
+      group.add(headMesh(pointFn, axis, 1, matInk));
+      obj = { group, pointFn, kind, dot, axis };
+    }
     group.visible = false;
     stage.add(group);
-    return { group, pointFn, dot };
+    return obj;
   }
+
   const INDICATORS = {
-    yaw: makeIndicator(yawPoint, 'y', false),
-    tilt: makeIndicator(tiltPoint, 'x', false),
-    flip: makeIndicator(flipPoint, 'x', true),
+    yaw: makeIndicator(yawPoint, 'y', 'static'),
+    tilt: makeIndicator(tiltPoint, 'x', 'static'),
+    flip: makeIndicator(flipPoint, 'x', 'progressive'),
   };
   function indicatorFor(turn) {
     if (!turn) return null;
@@ -267,13 +236,45 @@ export function createGuide(container, opts) {
     return Math.abs(turn.deg) >= 180 ? INDICATORS.flip : INDICATORS.tilt;
   }
 
-  // ---- per-step orientations, composed from the actual turns ----
+  // phase: 'pre' | 'travel' | 'hold'; e is the eased travel fraction [0,1].
+  function renderIndicator(obj, phase, e) {
+    if (!obj) return;
+    if (phase === 'hold') {
+      obj.dot.visible = false;
+    } else {
+      obj.dot.visible = true;
+      obj.dot.position.copy(obj.pointFn(phase === 'pre' ? 0 : e));
+    }
+    if (obj.kind === 'progressive') {
+      const p = phase === 'hold' ? 1 : phase === 'pre' ? 0 : e;
+      obj.bright.geometry.setDrawRange(0, Math.max(0, Math.floor(p * obj.fullCount)));
+      if (p > 0.03) {
+        obj.head.visible = true;
+        updateHead(obj.head, obj.pointFn, obj.axis, p);
+      } else {
+        obj.head.visible = false;
+      }
+      if (p > 0.58) {
+        obj.chev.visible = true;
+        updateHead(obj.chev, obj.pointFn, obj.axis, Math.max(0.02, p - 0.13));
+      } else {
+        obj.chev.visible = false;
+      }
+    }
+  }
+
+  // ---- the active scan sequence and its per-step orientations ----------------
+  // SEQ comes from the size module; STEP_Q/STEP_AXIS/STEP_RAD are composed from
+  // the declared turns so the motion is exact even for the 180° flip.
+  let SEQ = [];
   const STEP_Q = [];
   const STEP_AXIS = [];
   const STEP_RAD = [];
-  {
+  function setSequence(seq) {
+    SEQ = Array.isArray(seq) ? seq : [];
+    STEP_Q.length = STEP_AXIS.length = STEP_RAD.length = 0;
     let q = new THREE.Quaternion();
-    for (const step of SCAN_SEQUENCE) {
+    for (const step of SEQ) {
       if (step.turn) {
         const axis = new THREE.Vector3();
         axis.setComponent(AXIS_INDEX[step.turn.axis], 1);
@@ -287,6 +288,7 @@ export function createGuide(container, opts) {
       }
       STEP_Q.push(q.clone());
     }
+    showStep(Math.min(stepIndex, Math.max(0, SEQ.length - 1)));
   }
 
   // ---- demonstration loop: show start pose → turn → hold → repeat ----
@@ -297,6 +299,7 @@ export function createGuide(container, opts) {
   let stepIndex = 0;
   let active = null; // current indicator
   let cycleStart = null;
+  let curPhase = null;
   let inkTarget = 0.95;
   const tmpQ = new THREE.Quaternion();
   const swayA = new THREE.Quaternion();
@@ -314,64 +317,79 @@ export function createGuide(container, opts) {
   }
 
   function showStep(i) {
-    stepIndex = Math.max(0, Math.min(SCAN_SEQUENCE.length - 1, i | 0));
+    stepIndex = Math.max(0, Math.min(Math.max(0, SEQ.length - 1), i | 0));
     cycleStart = null; // restart the demonstration for the new step
-    setIndicator(SCAN_SEQUENCE[stepIndex].turn);
-    cube.quaternion.copy(STEP_Q[stepIndex]);
+    curPhase = null;
+    const step = SEQ[stepIndex];
+    setIndicator(step ? step.turn : null);
+    if (STEP_Q[stepIndex]) cube.quaternion.copy(STEP_Q[stepIndex]);
     if (reducedMotion) {
-      matInk.opacity = 0.95;
-      matAxis.opacity = 0.38;
+      matInk.opacity = 0.9;
+      matAxis.opacity = 0.34;
+      if (active) renderIndicator(active, 'hold', 1);
     }
+  }
+
+  // ---- mirror (selfie camera): reflect the whole stage left-for-right --------
+  let mirrored = false;
+  function setMirror(on) {
+    mirrored = !!on;
+    stage.scale.x = mirrored ? -1 : 1;
   }
 
   let running = false;
   let raf = 0;
   function loop(now) {
     if (!running) return;
-    const step = SCAN_SEQUENCE[stepIndex];
+    const step = SEQ[stepIndex];
     if (reducedMotion) {
       // Snap to the target pose; the static arrow still shows the turn.
-      cube.quaternion.copy(STEP_Q[stepIndex]);
-      inkTarget = 0.95;
-      if (active) active.dot.visible = false;
-    } else if (!step.turn) {
+      if (STEP_Q[stepIndex]) cube.quaternion.copy(STEP_Q[stepIndex]);
+      inkTarget = 0.9;
+      if (active) renderIndicator(active, 'hold', 1);
+    } else if (!step || !step.turn) {
       // Starting hold: a slow, instrument-steady sway so the pose reads as 3D.
       swayA.setFromAxisAngle(Y, Math.sin(now / 1900) * 0.05);
       swayB.setFromAxisAngle(X, Math.sin(now / 2700 + 1) * 0.03);
-      cube.quaternion.copy(swayA).multiply(swayB).multiply(STEP_Q[0]);
+      cube.quaternion.copy(swayA).multiply(swayB).multiply(STEP_Q[stepIndex] || new THREE.Quaternion());
     } else {
       if (cycleStart == null) cycleStart = now;
       const travel = travelMsFor(step.turn);
       const cycle = PRE_MS + travel + HOLD_MS;
       const t = (now - cycleStart) % cycle;
       const qFrom = STEP_Q[stepIndex - 1];
+      let phase;
+      let e = 0;
       if (t < PRE_MS) {
+        phase = 'pre';
         cube.quaternion.copy(qFrom);
         inkTarget = 0.95;
-        if (active) {
-          active.dot.visible = true;
-          active.dot.position.copy(active.pointFn(0));
-        }
       } else if (t < PRE_MS + travel) {
+        phase = 'travel';
         // Rotate about the REAL turn axis by the eased fraction of the real
         // angle — exact even for the 180° flip, where slerp would be ambiguous.
-        const e = easeInOut((t - PRE_MS) / travel);
+        e = easeInOut((t - PRE_MS) / travel);
         tmpQ.setFromAxisAngle(STEP_AXIS[stepIndex], STEP_RAD[stepIndex] * e);
         cube.quaternion.copy(tmpQ).multiply(qFrom);
         inkTarget = 0.95;
-        if (active) {
-          active.dot.visible = true;
-          active.dot.position.copy(active.pointFn(e));
-        }
       } else {
+        phase = 'hold';
         cube.quaternion.copy(STEP_Q[stepIndex]);
         inkTarget = 0.32; // rest quietly on the presented face
-        if (active) active.dot.visible = false;
+      }
+      if (active) renderIndicator(active, phase, e);
+      // Fire the arrival tick exactly once, as travel completes and the face
+      // locks in — the UI pulses the reticle in sync.
+      if (phase !== curPhase) {
+        if (phase === 'hold') onArrive();
+        curPhase = phase;
       }
     }
     // ease the indicator brightness between phases
-    matInk.opacity += (inkTarget - matInk.opacity) * 0.12;
-    matAxis.opacity += (inkTarget * 0.4 - matAxis.opacity) * 0.12;
+    if (!reducedMotion) {
+      matInk.opacity += (inkTarget - matInk.opacity) * 0.12;
+      matAxis.opacity += (inkTarget * 0.4 - matAxis.opacity) * 0.12;
+    }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
@@ -379,6 +397,7 @@ export function createGuide(container, opts) {
     if (running) return;
     running = true;
     cycleStart = null;
+    curPhase = null;
     resize();
     raf = requestAnimationFrame(loop);
   }
@@ -397,7 +416,7 @@ export function createGuide(container, opts) {
   const ro = new ResizeObserver(resize);
   ro.observe(container);
 
-  showStep(0);
+  setSequence(opts.scanSequence || []);
 
-  return { showStep, start, stop, resize };
+  return { showStep, setSequence, setMirror, start, stop, resize };
 }

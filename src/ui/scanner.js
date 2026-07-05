@@ -120,5 +120,17 @@ export function createScanner({ video, gridN }) {
     return !!stream;
   }
 
-  return { start, stop, sample, isActive, hasTorch, setTorch, isTorchOn };
+  // The active camera's facing mode: 'user' (front / selfie — its preview reads
+  // mirrored), 'environment' (rear), or null when unknown. The app uses this to
+  // decide whether to mirror the preview and flip the turn guidance.
+  function facingMode() {
+    if (!track || !track.getSettings) return null;
+    try {
+      return track.getSettings().facingMode || null;
+    } catch {
+      return null;
+    }
+  }
+
+  return { start, stop, sample, isActive, hasTorch, setTorch, isTorchOn, facingMode };
 }

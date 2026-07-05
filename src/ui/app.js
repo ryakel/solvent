@@ -4,7 +4,7 @@
 import { SIZE_MODULES, getSizeModule, defaultSizeModule } from '../sizes/index.js';
 import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
-import { createGuide, SCAN_SEQUENCE } from './guide.js';
+import { createGuide } from './guide.js';
 import { stateFromGeom, isSolved } from '../core/cube2.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -19,12 +19,6 @@ const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').mat
 // Solution turn duration. Kept deliberately unhurried so each move reads clearly.
 const ANIM_MS = REDUCED_MOTION ? 0 : 720;
 
-// Capture order for scanning. SCAN_SEQUENCE (see guide.js) orders the faces so
-// each step is ONE simple whole-cube turn from the previous — the guide cube
-// demonstrates that exact turn, and the labels/text below are derived from it.
-// The net layout and validation still use the module's faceOrder.
-const SCAN_FACES = SCAN_SEQUENCE.map((s) => s.face);
-
 export function initApp() {
   const mod = { current: defaultSizeModule() };
   let faces = mod.current.emptyFaces();
@@ -36,6 +30,16 @@ export function initApp() {
   let solution = null;
   let stepIndex = 0;
   let animating = false;
+  // Whether the camera preview is mirrored (a selfie / front camera). When on,
+  // the preview flips left-for-right, so the guide and the turn wording flip to
+  // match. Auto-detected from the camera when possible; also user-toggleable.
+  let mirror = false;
+
+  // The active size module owns its own scan path (ordered faces + the single
+  // whole-cube turn between each). The net layout and validation still use the
+  // module's faceOrder; only capture guidance uses the scan sequence.
+  const scanSeq = () => mod.current.scanSequence;
+  const scanFaces = () => scanSeq().map((s) => s.face);
 
   // ---- size buttons ----
   const sizeButtons = $('#size-buttons');
@@ -62,6 +66,8 @@ export function initApp() {
     buildFaceProgress();
     buildNet();
     buildPalette();
+    // The scan path is per-size; hand the new module's sequence to the guide.
+    if (guide) guide.setSequence(mod.current.scanSequence);
     updateCaptureTarget();
     showScreen('capture');
   }
@@ -110,7 +116,7 @@ export function initApp() {
   function buildFaceProgress() {
     const wrap = $('#face-progress');
     wrap.innerHTML = '';
-    SCAN_FACES.forEach((f, i) => {
+    scanFaces().forEach((f, i) => {
       const chip = el('button', 'face-chip');
       const sw = el('span', 'swatch');
       sw.style.background = mod.current.colorHex[mod.current.faceColor[f]];
@@ -129,19 +135,22 @@ export function initApp() {
   }
   function refreshFaceProgress() {
     const chips = $('#face-progress').children;
-    SCAN_FACES.forEach((f, i) => {
+    scanFaces().forEach((f, i) => {
       chips[i].dataset.active = String(i === captureIndex);
       chips[i].dataset.done = String(isFaceFilled(f));
     });
   }
   function updateCaptureTarget() {
-    const step = SCAN_SEQUENCE[captureIndex];
+    const seq = scanSeq();
+    const step = seq[captureIndex];
     const f = step.face;
-    $('#capture-step').textContent = `STEP ${captureIndex + 1}/${SCAN_SEQUENCE.length}`;
-    $('#capture-turn').textContent = step.label;
+    // Re-derive the label/text from the turn so the wording flips with mirror.
+    const { label, text } = mod.current.describeScanStep(step.turn, step.face, { mirror });
+    $('#capture-step').textContent = `STEP ${captureIndex + 1}/${seq.length}`;
+    $('#capture-turn').textContent = label;
     $('#capture-face-name').textContent = mod.current.faceLabels[f];
     $('#capture-face-swatch').style.background = mod.current.colorHex[mod.current.faceColor[f]];
-    $('#capture-face-hint').textContent = step.text;
+    $('#capture-face-hint').textContent = text;
     if (guide) guide.showStep(captureIndex);
     refreshFaceProgress();
   }
@@ -153,10 +162,48 @@ export function initApp() {
       guide = createGuide($('#guide-view'), {
         colorHex: mod.current.colorHex,
         reducedMotion: REDUCED_MOTION,
+        scanSequence: mod.current.scanSequence,
+        solvedState: mod.current.SOLVED_STATE,
+        geomFromState: mod.current.geomFromState,
+        onArrive: pulseArrival,
       });
+      guide.setMirror(mirror);
     } catch (err) {
       guide = null; // WebGL unavailable: text guidance still covers it.
     }
+  }
+
+  // Arrival tick: when the guide's demonstrated turn completes and the face
+  // locks in, flash the reticle's corner brackets (and the guide's own frame)
+  // once, in sync — a crisp, instrument-like confirmation.
+  let arrivalTimer = 0;
+  function pulseArrival() {
+    const nodes = [$('#reticle'), $('#guide-view').closest('.guide-stage')];
+    for (const n of nodes) {
+      if (!n) continue;
+      n.classList.remove('arrived');
+      // reflow so re-adding the class restarts the animation
+      void n.offsetWidth;
+      n.classList.add('arrived');
+    }
+    clearTimeout(arrivalTimer);
+    arrivalTimer = setTimeout(() => {
+      for (const n of nodes) if (n) n.classList.remove('arrived');
+    }, 620);
+  }
+
+  // Flip the mirror state (auto-detected or user-toggled) and keep the guide,
+  // the preview, and the wording in agreement.
+  function setMirror(on) {
+    mirror = !!on;
+    $('#camera-wrap').classList.toggle('is-mirrored', mirror);
+    const btn = $('#btn-mirror');
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(mirror));
+      btn.textContent = mirror ? 'Mirror: on' : 'Mirror: off';
+    }
+    if (guide) guide.setMirror(mirror);
+    updateCaptureTarget();
   }
 
   // ---- palette ----
@@ -277,6 +324,9 @@ export function initApp() {
     updateFlashButton();
   });
 
+  const mirrorBtn = $('#btn-mirror');
+  if (mirrorBtn) mirrorBtn.addEventListener('click', () => setMirror(!mirror));
+
   async function startCamera() {
     scanner = createScanner({ video, gridN: mod.current.gridN });
     const ok = await scanner.start();
@@ -290,6 +340,11 @@ export function initApp() {
     } else {
       msg.hidden = true;
       capBtn.disabled = false;
+      // Auto-detect a mirrored (front / selfie) camera and flip guidance to
+      // match. Users can still override with the Mirror toggle.
+      const fm = scanner.facingMode();
+      if (fm === 'user') setMirror(true);
+      else if (fm === 'environment') setMirror(false);
     }
     updateFlashButton();
   }
@@ -298,10 +353,10 @@ export function initApp() {
     if (!scanner || !scanner.isActive()) return;
     const samples = scanner.sample();
     if (!samples) return;
-    const f = SCAN_FACES[captureIndex];
+    const order = scanFaces();
+    const f = order[captureIndex];
     faces[f] = samples.map((rgb) => mod.current.classifyColor(rgb));
     // advance to next unfilled face
-    const order = SCAN_FACES;
     let next = (captureIndex + 1) % order.length;
     for (let i = 0; i < order.length; i++) {
       if (!isFaceFilled(order[next])) break;
@@ -313,7 +368,7 @@ export function initApp() {
   });
 
   $('#btn-skip-face').addEventListener('click', () => {
-    captureIndex = (captureIndex + 1) % SCAN_FACES.length;
+    captureIndex = (captureIndex + 1) % scanFaces().length;
     updateCaptureTarget();
   });
 

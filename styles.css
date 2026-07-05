@@ -197,9 +197,43 @@ h1 {
   grid-template-columns: repeat(var(--gn, 2), 1fr);
   grid-template-rows: repeat(var(--gn, 2), 1fr);
 }
-.reticle::before, .reticle::after { content: none; }
+.reticle::before { content: none; }
+/* Corner brackets, normally invisible, that pulse once when the guide's turn
+   completes and the face locks in — the "arrival tick", synced to the guide. */
+.reticle::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  pointer-events: none;
+  opacity: 0;
+  --bl: 20px;
+  --bw: 2.5px;
+  background:
+    linear-gradient(var(--ink), var(--ink)) left 0 top 0 / var(--bl) var(--bw),
+    linear-gradient(var(--ink), var(--ink)) left 0 top 0 / var(--bw) var(--bl),
+    linear-gradient(var(--ink), var(--ink)) right 0 top 0 / var(--bl) var(--bw),
+    linear-gradient(var(--ink), var(--ink)) right 0 top 0 / var(--bw) var(--bl),
+    linear-gradient(var(--ink), var(--ink)) left 0 bottom 0 / var(--bl) var(--bw),
+    linear-gradient(var(--ink), var(--ink)) left 0 bottom 0 / var(--bw) var(--bl),
+    linear-gradient(var(--ink), var(--ink)) right 0 bottom 0 / var(--bl) var(--bw),
+    linear-gradient(var(--ink), var(--ink)) right 0 bottom 0 / var(--bw) var(--bl);
+  background-repeat: no-repeat;
+}
+.reticle.arrived::after { animation: arrival-tick 600ms ease-out both; }
 .reticle i {
   border: 1px dashed rgba(244, 246, 248, 0.4);
+}
+@keyframes arrival-tick {
+  0% { opacity: 0; transform: scale(1.03); }
+  22% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
+}
+/* Mirror for a front / selfie camera: the raw preview reads reversed, so flip it
+   to feel natural; the guide + wording flip in lockstep (see app.js). */
+.camera-wrap.is-mirrored #video { transform: scaleX(-1); }
+@media (prefers-reduced-motion: reduce) {
+  .reticle.arrived::after,
+  .guide-stage.arrived::after { animation: none; }
 }
 .camera-msg {
   position: absolute;
@@ -251,6 +285,14 @@ h1 {
     linear-gradient(var(--ink), var(--ink)) right 0 bottom 0 / 15px 1.5px,
     linear-gradient(var(--ink), var(--ink)) right 0 bottom 0 / 1.5px 15px;
   background-repeat: no-repeat;
+}
+/* The guide's own frame brackets brighten once as the demonstrated turn lands,
+   in sync with the reticle's arrival tick. */
+.guide-stage.arrived::after { animation: guide-tick 600ms ease-out; }
+@keyframes guide-tick {
+  0% { opacity: 0.28; }
+  22% { opacity: 0.9; }
+  100% { opacity: 0.28; }
 }
 .guide-hud {
   position: absolute;
@@ -319,6 +361,12 @@ h1 {
   border-color: var(--c-yellow);
   color: #12151a;
   background: var(--c-yellow);
+  font-weight: 600;
+}
+#btn-mirror[aria-pressed="true"] {
+  border-color: var(--c-blue);
+  color: var(--ink);
+  background: rgba(43, 127, 255, 0.14);
   font-weight: 600;
 }
 .fineprint { font-size: 12.5px; color: var(--ink-faint); margin: 0; }
