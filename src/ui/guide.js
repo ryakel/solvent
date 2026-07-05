@@ -69,30 +69,54 @@ export function createGuide(container, opts) {
     return TILT.clone().multiply(align);
   }
 
-  // Start from a neutral iso view so the first face change animates in.
-  let target = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.5, -0.7, 0));
-  group.quaternion.copy(target);
+  // The demonstration turns the cube from a pose rotated away toward the face-on
+  // pose, so the motion reads as "rotate your cube like this." It then holds, and
+  // repeats — a slow, looping teach.
+  const START_OFFSET = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.18, 0.95, 0));
+  const TRAVEL_MS = 1700; // slow, legible turn
+  const HOLD_MS = 1100; // pause on the face before repeating
+  const CYCLE_MS = TRAVEL_MS + HOLD_MS;
+
+  let toQ = faceQuaternion('U');
+  let fromQ = START_OFFSET.clone().multiply(toQ);
+  let cycleStart = null; // set on the first animated frame after a face change
+  group.quaternion.copy(fromQ);
 
   function showFace(face) {
-    target = faceQuaternion(face);
-    if (reducedMotion) group.quaternion.copy(target);
+    toQ = faceQuaternion(face);
+    fromQ = START_OFFSET.clone().multiply(toQ);
+    cycleStart = null; // restart the demonstration for the new face
+    if (reducedMotion) group.quaternion.copy(toQ);
+  }
+
+  function easeInOut(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
   let running = false;
   let raf = 0;
-  function loop() {
+  function loop(now) {
     if (!running) return;
-    // exponential ease toward the target orientation
-    if (!reducedMotion) group.quaternion.slerp(target, 0.14);
-    else group.quaternion.copy(target);
+    if (reducedMotion) {
+      group.quaternion.copy(toQ);
+    } else {
+      if (cycleStart == null) cycleStart = now;
+      const t = (now - cycleStart) % CYCLE_MS;
+      if (t < TRAVEL_MS) {
+        group.quaternion.copy(fromQ).slerp(toQ, easeInOut(t / TRAVEL_MS));
+      } else {
+        group.quaternion.copy(toQ);
+      }
+    }
     renderer.render(scene, camera);
     raf = requestAnimationFrame(loop);
   }
   function start() {
     if (running) return;
     running = true;
+    cycleStart = null;
     resize();
-    loop();
+    raf = requestAnimationFrame(loop);
   }
   function stop() {
     running = false;

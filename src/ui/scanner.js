@@ -6,6 +6,8 @@
 
 export function createScanner({ video, gridN }) {
   let stream = null;
+  let track = null;
+  let torchOn = false;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
@@ -20,19 +22,54 @@ export function createScanner({ video, gridN }) {
       video.setAttribute('playsinline', '');
       video.muted = true;
       await video.play().catch(() => {});
+      track = stream.getVideoTracks()[0] || null;
+      torchOn = false;
       return true;
     } catch (err) {
       stream = null;
+      track = null;
       return false;
     }
   }
 
   function stop() {
+    if (track && torchOn) {
+      // best-effort turn the light off before releasing
+      track.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
+      torchOn = false;
+    }
     if (stream) {
       for (const t of stream.getTracks()) t.stop();
       stream = null;
     }
+    track = null;
     video.srcObject = null;
+  }
+
+  // Torch / flash is only available on some devices (typically the rear camera
+  // on Android). Returns false when unsupported so the UI can hide the control.
+  function hasTorch() {
+    if (!track || !track.getCapabilities) return false;
+    try {
+      return track.getCapabilities().torch === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function setTorch(on) {
+    if (!track) return false;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on }] });
+      torchOn = on;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function isTorchOn() {
+    return torchOn;
   }
 
   // Sample the centered square reticle into gridN*gridN averaged colors, in
@@ -83,5 +120,5 @@ export function createScanner({ video, gridN }) {
     return !!stream;
   }
 
-  return { start, stop, sample, isActive };
+  return { start, stop, sample, isActive, hasTorch, setTorch, isTorchOn };
 }

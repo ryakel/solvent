@@ -16,7 +16,8 @@ const el = (tag, cls, txt) => {
 };
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const ANIM_MS = REDUCED_MOTION ? 0 : 430;
+// Solution turn duration. Kept deliberately unhurried so each move reads clearly.
+const ANIM_MS = REDUCED_MOTION ? 0 : 720;
 
 // Per-face guidance for the scan step (assumes White up / Green front hold).
 const SCAN_GUIDE = {
@@ -261,6 +262,21 @@ export function initApp() {
 
   // ---- capture actions ----
   const video = $('#video');
+  const flashBtn = $('#btn-flash');
+  function updateFlashButton() {
+    const supported = scanner && scanner.isActive() && scanner.hasTorch();
+    flashBtn.hidden = !supported;
+    if (!supported) return;
+    const on = scanner.isTorchOn();
+    flashBtn.setAttribute('aria-pressed', String(on));
+    flashBtn.textContent = on ? 'Flash on' : 'Flash off';
+  }
+  flashBtn.addEventListener('click', async () => {
+    if (!scanner || !scanner.hasTorch()) return;
+    await scanner.setTorch(!scanner.isTorchOn());
+    updateFlashButton();
+  });
+
   async function startCamera() {
     scanner = createScanner({ video, gridN: mod.current.gridN });
     const ok = await scanner.start();
@@ -275,6 +291,7 @@ export function initApp() {
       msg.hidden = true;
       capBtn.disabled = false;
     }
+    updateFlashButton();
   }
 
   $('#btn-capture').addEventListener('click', () => {
@@ -302,6 +319,7 @@ export function initApp() {
 
   function goReview() {
     if (scanner) scanner.stop();
+    updateFlashButton();
     buildNet();
     showScreen('review');
   }
