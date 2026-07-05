@@ -231,15 +231,18 @@ export function createGuide(container, opts) {
     const a = deg2rad(-30 + t * 180);
     return new THREE.Vector3(1.18 * Math.cos(a), 1.3, 1.18 * Math.sin(a));
   };
-  // Tilt arc: beside the cube on the right, rolling the top toward the camera.
+  // Tilt arc: a large meridian sweep that wraps OVER the cube like a wheel
+  // rolling toward the camera — from behind the top, over it, down the front.
+  // Offset a little toward the cube's right half so it doesn't cover the
+  // center of the presented face.
   const tiltPoint = (t) => {
-    const a = deg2rad(-25 + t * 140);
-    return new THREE.Vector3(1.28, 0.92 * Math.cos(a), 0.92 * Math.sin(a));
+    const a = deg2rad(-35 + t * 150);
+    return new THREE.Vector3(0.62, 1.42 * Math.cos(a), 1.42 * Math.sin(a));
   };
   // Flip arc: same axis, but sweeping all the way under — a half turn.
   const flipPoint = (t) => {
-    const a = deg2rad(-15 + t * 205);
-    return new THREE.Vector3(1.28, 0.98 * Math.cos(a), 0.98 * Math.sin(a));
+    const a = deg2rad(-25 + t * 225);
+    return new THREE.Vector3(0.62, 1.48 * Math.cos(a), 1.48 * Math.sin(a));
   };
 
   function makeIndicator(pointFn, axis, doubleHead) {
