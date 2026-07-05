@@ -3,34 +3,39 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    # Only redeploy when files that actually ship change. Commits that touch just
+    # tests, docs, or tooling won't consume a Pages deployment — this keeps us well
+    # under GitHub Pages' hourly deployment rate limit.
+    paths:
+      - 'index.html'
+      - 'styles.css'
+      - 'src/**'
+      - 'assets/**'
+      - 'vendor/**'
+      - 'DESIGN.md'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
-# Allow the workflow to publish to Pages.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# One deploy at a time; let an in-progress run finish.
+# Let an in-progress deploy finish; queue at most one more.
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  # The build job has NO `environment`, so it can run even before Pages is
-  # enabled. configure-pages with `enablement: true` turns Pages on (with GitHub
-  # Actions as the source), which also creates the github-pages environment the
-  # deploy job needs. This avoids the chicken-and-egg where an environment-gated
-  # job fails at startup before it can enable Pages.
+  # Build has NO environment, so it can enable Pages even from a cold repo.
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Solvent is a pure static site with no build step: the repository root is
-      # already the deployable site. Copy only the files that belong on the
-      # published site (omit tests and dev tooling).
+      # Pure static site: copy the shipping files into _site (omit tests/tooling).
       - name: Assemble site
         run: |
           mkdir -p _site
@@ -53,7 +58,20 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Deploy
+      # First attempt; don't fail the job yet so we can retry a transient throttle.
+      - name: Deploy to GitHub Pages
         id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Back off before retry
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+
+      # Second attempt clears brief throttles/races. (A full hourly-limit trip
+      # still needs the window to reset — that's a GitHub-side cap.)
+      - name: Deploy to GitHub Pages (retry)
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
