@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Solvent — scan · verify · solve</title>
+    <meta
+      name="description"
+      content="Solvent is a precise 2×2 cube solver. Scan a cube with your camera, correct any misreads, and get an animated, step-by-step 3D solution."
+    />
+    <meta name="theme-color" content="#12151A" />
+
+    <!-- Relative asset paths only, so the site works under a /solvent/ subpath. -->
+    <link rel="icon" type="image/png" href="./assets/solvent-monogram.png" />
+    <link rel="apple-touch-icon" href="./assets/solvent-icon.png" />
+    <meta property="og:title" content="Solvent — a precise 2×2 cube solver" />
+    <meta property="og:description" content="Scan · Verify · Solve. An animated, step-by-step 3D 2×2 solver." />
+    <meta property="og:image" content="./assets/solvent-icon.png" />
+    <meta property="og:type" content="website" />
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="app-header">
+      <img class="wordmark" src="./assets/solvent-wordmark.png" alt="Solvent — scan · verify · solve" />
+      <div class="size-select" role="group" aria-label="Cube size">
+        <span class="size-select__label">Size</span>
+        <div id="size-buttons" class="size-buttons"></div>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Step rail -->
+      <nav class="steps" aria-label="Progress">
+        <ol id="step-rail">
+          <li data-step="capture" aria-current="step"><span>1</span> Scan</li>
+          <li data-step="review"><span>2</span> Verify</li>
+          <li data-step="solution"><span>3</span> Solve</li>
+        </ol>
+      </nav>
+
+      <!-- ============ CAPTURE ============ -->
+      <section id="screen-capture" class="screen is-active" aria-labelledby="capture-h">
+        <div class="screen__head">
+          <h1 id="capture-h">Scan the cube</h1>
+          <p class="lede">
+            Point the camera at one face at a time. Line the cube up inside the
+            reticle and capture. Every sticker is yours to correct next — the scan
+            just gets you started.
+          </p>
+        </div>
+
+        <div class="capture-grid">
+          <div class="camera-wrap" id="camera-wrap">
+            <video id="video" playsinline muted aria-label="Camera preview"></video>
+            <div class="reticle" id="reticle" aria-hidden="true"></div>
+            <div class="camera-msg" id="camera-msg" hidden></div>
+          </div>
+
+          <div class="capture-side">
+            <div class="capture-target">
+              <span class="capture-target__label">Now showing</span>
+              <span class="capture-target__face" id="capture-face-name">Up</span>
+              <span class="capture-target__hint" id="capture-face-hint"></span>
+            </div>
+
+            <div class="face-progress" id="face-progress" aria-label="Faces captured"></div>
+
+            <div class="capture-actions">
+              <button class="btn btn--primary" id="btn-capture">Capture face</button>
+              <button class="btn" id="btn-skip-face">Skip</button>
+            </div>
+            <div class="capture-actions">
+              <button class="btn btn--ghost" id="btn-manual">Enter colors by hand</button>
+            </div>
+            <p class="fineprint" id="capture-fineprint">
+              Camera needs a moment and a secure connection. If it doesn't appear,
+              enter colors by hand — the solver works the same.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ REVIEW / VERIFY ============ -->
+      <section id="screen-review" class="screen" aria-labelledby="review-h">
+        <div class="screen__head">
+          <h1 id="review-h">Verify every sticker</h1>
+          <p class="lede">
+            Tap a sticker, then a color, to fix any misread. Solvent checks the cube
+            is physically real before it solves — no impossible cubes.
+          </p>
+        </div>
+
+        <div class="palette" id="palette" role="group" aria-label="Color palette"></div>
+
+        <div class="net" id="net"></div>
+
+        <div class="validation" id="validation" role="alert" aria-live="polite"></div>
+
+        <div class="review-actions">
+          <button class="btn" id="btn-back-capture">Back to scan</button>
+          <button class="btn btn--ghost" id="btn-reset">Reset cube</button>
+          <button class="btn btn--primary" id="btn-solve">Solve</button>
+        </div>
+      </section>
+
+      <!-- ============ SOLUTION ============ -->
+      <section id="screen-solution" class="screen" aria-labelledby="solution-h">
+        <div class="screen__head">
+          <h1 id="solution-h">Solution</h1>
+          <p class="lede" id="solution-lede"></p>
+        </div>
+
+        <div class="solve-grid">
+          <div class="viewer" id="viewer" aria-label="3D cube. Drag to rotate."></div>
+
+          <div class="solve-side">
+            <div class="move-readout">
+              <span class="move-readout__count" id="move-counter">Move 0 / 0</span>
+              <span class="move-readout__hint" id="move-hint">Ready.</span>
+            </div>
+
+            <ol class="move-list" id="move-list" aria-label="Solution moves"></ol>
+
+            <div class="stepper">
+              <button class="btn" id="btn-prev" aria-label="Previous move">‹ Prev</button>
+              <button class="btn btn--primary" id="btn-next" aria-label="Next move">Next ›</button>
+            </div>
+            <div class="stepper">
+              <button class="btn btn--ghost" id="btn-restart-anim">Reset animation</button>
+              <button class="btn btn--ghost" id="btn-new">New scan</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <span>Solvent</span>
+      <span class="dot">·</span>
+      <span>The solver is unit-tested against thousands of random scrambles.</span>
+      <span class="dot">·</span>
+      <a href="https://github.com/ryakel/solvent" rel="noopener">Source</a>
+    </footer>
+
+    <script type="module" src="./src/ui/main.js"></script>
+  </body>
+</html>
