@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+
+# os / editor
+.DS_Store
+*.log
+Thumbs.db
+.idea/
+.vscode/
+
+# scratch
+/_shot*.mjs
+/tmp/

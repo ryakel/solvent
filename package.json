@@ -1,0 +1,17 @@
+{
+  "name": "solvent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Solvent — a precise 2x2 Rubik's cube solver web app.",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:unit": "node --test tests/cube2.test.js tests/solver2.test.js tests/facelet.test.js",
+    "serve": "node scripts/serve.mjs 8080",
+    "test:e2e": "node --test tests/e2e.test.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.49.1"
+  }
+}
