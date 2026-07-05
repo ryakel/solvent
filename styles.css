@@ -214,37 +214,85 @@ h1 {
 }
 
 .capture-side { display: flex; flex-direction: column; gap: 16px; }
+/* The turn-guide card: an animated demonstration of the exact whole-cube turn
+   for this scan step, with a technical HUD readout over the canvas. */
 .capture-target {
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 16px;
   background: var(--slate-2);
   display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.capture-target__info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.guide-view {
-  flex: 0 0 auto;
-  width: 116px;
-  height: 116px;
-  border-radius: 12px;
-  background: radial-gradient(circle at 50% 42%, #1a1f27, #0c0e13);
-  border: 1px solid var(--line);
-  position: relative;
+  flex-direction: column;
   overflow: hidden;
 }
-/* a faint reticle framing the guide, echoing the camera target */
-.guide-view::after {
+.guide-stage {
+  position: relative;
+  background: radial-gradient(circle at 50% 42%, #1a1f27, #0c0e13);
+  border-bottom: 1px solid var(--line);
+}
+.guide-view {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  max-height: 240px;
+}
+/* engineered corner brackets, echoing the camera reticle */
+.guide-stage::after {
   content: "";
   position: absolute;
-  inset: 22%;
-  border: 1.5px solid rgba(244, 246, 248, 0.28);
-  border-radius: 6px;
+  inset: 8px;
+  pointer-events: none;
+  opacity: 0.28;
+  background:
+    linear-gradient(var(--ink), var(--ink)) left 0 top 0 / 15px 1.5px,
+    linear-gradient(var(--ink), var(--ink)) left 0 top 0 / 1.5px 15px,
+    linear-gradient(var(--ink), var(--ink)) right 0 top 0 / 15px 1.5px,
+    linear-gradient(var(--ink), var(--ink)) right 0 top 0 / 1.5px 15px,
+    linear-gradient(var(--ink), var(--ink)) left 0 bottom 0 / 15px 1.5px,
+    linear-gradient(var(--ink), var(--ink)) left 0 bottom 0 / 1.5px 15px,
+    linear-gradient(var(--ink), var(--ink)) right 0 bottom 0 / 15px 1.5px,
+    linear-gradient(var(--ink), var(--ink)) right 0 bottom 0 / 1.5px 15px;
+  background-repeat: no-repeat;
+}
+.guide-hud {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
   pointer-events: none;
 }
+.guide-hud__step,
+.guide-hud__turn {
+  background: rgba(18, 21, 26, 0.72);
+  border-radius: 5px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.guide-hud__step {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--ink-faint);
+  border: 1px solid var(--line);
+}
+.guide-hud__turn {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+}
+.capture-target__info { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 16px 14px; }
 .capture-target__label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); }
-.capture-target__face { font-size: 24px; font-weight: 600; }
+.capture-target__face { font-size: 22px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.capture-target__face .face-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  background: var(--slate-3);
+  flex: 0 0 auto;
+}
 .capture-target__hint { font-size: 13px; color: var(--ink-dim); }
 
 .face-progress { display: flex; gap: 8px; flex-wrap: wrap; }

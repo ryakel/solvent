@@ -61,10 +61,19 @@
 
           <div class="capture-side">
             <div class="capture-target">
-              <div class="guide-view" id="guide-view" aria-hidden="true"></div>
-              <div class="capture-target__info">
-                <span class="capture-target__label">Now showing</span>
-                <span class="capture-target__face" id="capture-face-name">Up</span>
+              <div class="guide-stage">
+                <div class="guide-view" id="guide-view" aria-hidden="true"></div>
+                <div class="guide-hud" aria-hidden="true">
+                  <span class="guide-hud__step" id="capture-step">STEP 1/6</span>
+                  <span class="guide-hud__turn" id="capture-turn">START</span>
+                </div>
+              </div>
+              <div class="capture-target__info" aria-live="polite">
+                <span class="capture-target__label">Now scanning</span>
+                <span class="capture-target__face">
+                  <i class="face-dot" id="capture-face-swatch"></i>
+                  <span id="capture-face-name">Front</span>
+                </span>
                 <span class="capture-target__hint" id="capture-face-hint"></span>
               </div>
             </div>

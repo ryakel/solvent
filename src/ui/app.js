@@ -4,7 +4,7 @@
 import { SIZE_MODULES, getSizeModule, defaultSizeModule } from '../sizes/index.js';
 import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
-import { createGuide } from './guide.js';
+import { createGuide, SCAN_SEQUENCE } from './guide.js';
 import { stateFromGeom, isSolved } from '../core/cube2.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -19,15 +19,11 @@ const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').mat
 // Solution turn duration. Kept deliberately unhurried so each move reads clearly.
 const ANIM_MS = REDUCED_MOTION ? 0 : 720;
 
-// Per-face guidance for the scan step (assumes White up / Green front hold).
-const SCAN_GUIDE = {
-  U: 'Top face. Hold White up and Green toward you.',
-  F: 'Front face. Keep White up, Green facing the camera.',
-  R: 'Right face. Rotate the cube left so the right side faces you.',
-  B: 'Back face. Turn it all the way around.',
-  L: 'Left face. Rotate so the left side faces you.',
-  D: 'Bottom face. Flip the cube to show the underside.',
-};
+// Capture order for scanning. SCAN_SEQUENCE (see guide.js) orders the faces so
+// each step is ONE simple whole-cube turn from the previous — the guide cube
+// demonstrates that exact turn, and the labels/text below are derived from it.
+// The net layout and validation still use the module's faceOrder.
+const SCAN_FACES = SCAN_SEQUENCE.map((s) => s.face);
 
 export function initApp() {
   const mod = { current: defaultSizeModule() };
@@ -95,7 +91,7 @@ export function initApp() {
     if (guide) {
       if (name === 'capture') {
         guide.start();
-        guide.showFace(mod.current.faceOrder[captureIndex]);
+        guide.showStep(captureIndex);
       } else {
         guide.stop();
       }
@@ -114,7 +110,7 @@ export function initApp() {
   function buildFaceProgress() {
     const wrap = $('#face-progress');
     wrap.innerHTML = '';
-    mod.current.faceOrder.forEach((f, i) => {
+    SCAN_FACES.forEach((f, i) => {
       const chip = el('button', 'face-chip');
       const sw = el('span', 'swatch');
       sw.style.background = mod.current.colorHex[mod.current.faceColor[f]];
@@ -133,16 +129,20 @@ export function initApp() {
   }
   function refreshFaceProgress() {
     const chips = $('#face-progress').children;
-    mod.current.faceOrder.forEach((f, i) => {
+    SCAN_FACES.forEach((f, i) => {
       chips[i].dataset.active = String(i === captureIndex);
       chips[i].dataset.done = String(isFaceFilled(f));
     });
   }
   function updateCaptureTarget() {
-    const f = mod.current.faceOrder[captureIndex];
+    const step = SCAN_SEQUENCE[captureIndex];
+    const f = step.face;
+    $('#capture-step').textContent = `STEP ${captureIndex + 1}/${SCAN_SEQUENCE.length}`;
+    $('#capture-turn').textContent = step.label;
     $('#capture-face-name').textContent = mod.current.faceLabels[f];
-    $('#capture-face-hint').textContent = SCAN_GUIDE[f] || '';
-    if (guide) guide.showFace(f);
+    $('#capture-face-swatch').style.background = mod.current.colorHex[mod.current.faceColor[f]];
+    $('#capture-face-hint').textContent = step.text;
+    if (guide) guide.showStep(captureIndex);
     refreshFaceProgress();
   }
 
@@ -298,10 +298,10 @@ export function initApp() {
     if (!scanner || !scanner.isActive()) return;
     const samples = scanner.sample();
     if (!samples) return;
-    const f = mod.current.faceOrder[captureIndex];
+    const f = SCAN_FACES[captureIndex];
     faces[f] = samples.map((rgb) => mod.current.classifyColor(rgb));
     // advance to next unfilled face
-    const order = mod.current.faceOrder;
+    const order = SCAN_FACES;
     let next = (captureIndex + 1) % order.length;
     for (let i = 0; i < order.length; i++) {
       if (!isFaceFilled(order[next])) break;
@@ -313,7 +313,7 @@ export function initApp() {
   });
 
   $('#btn-skip-face').addEventListener('click', () => {
-    captureIndex = (captureIndex + 1) % mod.current.faceOrder.length;
+    captureIndex = (captureIndex + 1) % SCAN_FACES.length;
     updateCaptureTarget();
   });
 
