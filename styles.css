@@ -380,6 +380,24 @@ h1 {
 .face-chip[data-done="true"] { border-color: var(--c-green); }
 .face-chip[data-done="true"]::after { content: "✓"; color: var(--c-green); font-size: 12px; }
 
+/* "Recheck this face" marker — a small amber badge, distinct from the green
+   done-tick and the blue active border. A gentle nudge, never an error. */
+.face-chip__flag {
+  display: none;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  color: var(--slate);
+  background: var(--c-yellow);
+}
+.face-chip[data-flag="true"] { border-color: var(--c-yellow); }
+.face-chip[data-flag="true"] .face-chip__flag { display: block; }
+
 .capture-actions { display: flex; gap: 10px; }
 .capture-actions .btn { flex: 1; }
 #btn-flash[aria-pressed="true"] {
@@ -481,6 +499,33 @@ h1 {
 }
 .sticker:active { transform: scale(0.94); }
 .sticker[data-empty="true"] { background: var(--slate-3); border-style: dashed; border-color: var(--line-2); }
+
+/* Low-confidence scan read: a restrained double ring — a dark inner separator so
+   the amber outer ring reads on every sticker color (including yellow/white) and
+   on the dark net. Slowly pulses to draw the eye without alarming; a static ring
+   under reduced motion. Box-shadow only, so it never shifts layout or hit area. */
+.sticker[data-lowconf="true"] {
+  box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px var(--c-yellow);
+  animation: recheck-pulse 1.9s ease-in-out infinite;
+}
+@keyframes recheck-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px rgba(245, 197, 24, 0.5); }
+  50%      { box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px rgba(245, 197, 24, 1); }
+}
+
+/* Verify-screen uncertainty summary. Amber-keyed and clearly not the red error
+   box — a "look here," paired with the on-net highlights. */
+.uncertain-note {
+  margin-bottom: 16px;
+  padding: 10px 12px 10px 13px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-dim);
+  background: rgba(245, 197, 24, 0.07);
+  border: 1px solid rgba(245, 197, 24, 0.32);
+  border-left: 2px solid var(--c-yellow);
+  border-radius: 8px;
+}
 
 .validation { margin-bottom: 18px; min-height: 4px; }
 .validation__ok {
@@ -590,4 +635,9 @@ h1 {
 @media (prefers-reduced-motion: reduce) {
   .screen.is-active { animation: none; }
   * { scroll-behavior: auto; }
+  /* Keep the low-confidence marker as a steady ring — no pulse. */
+  .sticker[data-lowconf="true"] {
+    animation: none;
+    box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px var(--c-yellow);
+  }
 }

@@ -22,6 +22,10 @@ const ANIM_MS = REDUCED_MOTION ? 0 : 720;
 export function initApp() {
   const mod = { current: defaultSizeModule() };
   let faces = mod.current.emptyFaces();
+  // Per-sticker "this scan read was ambiguous" flags, parallel to `faces`. Only
+  // ever set on the camera path (manual entry has no confidence signal), reset
+  // alongside faces, and cleared for a sticker the moment the user repaints it.
+  let lowConf = emptyLowConf();
   let paintColor = mod.current.colors[0];
   let captureIndex = 0;
   let scanner = null;
@@ -60,6 +64,23 @@ export function initApp() {
   const scanSeq = () => mod.current.scanSequence;
   const scanFaces = () => scanSeq().map((s) => s.face);
 
+  // ---- scan-confidence bookkeeping ----
+  // A face flagged "uncertain" is one that was scanned (filled) and holds at
+  // least one low-confidence sticker. Skipped / empty faces are never flagged —
+  // they are merely incomplete, handled by the fill-in path.
+  function emptyLowConf() {
+    const f = {};
+    const n = mod.current.gridN * mod.current.gridN;
+    for (const face of mod.current.faceOrder) f[face] = new Array(n).fill(false);
+    return f;
+  }
+  function faceHasLowConf(f) {
+    return isFaceFilled(f) && !!lowConf[f] && lowConf[f].some(Boolean);
+  }
+  function countUncertainFaces() {
+    return mod.current.faceOrder.filter(faceHasLowConf).length;
+  }
+
   // ---- size buttons ----
   const sizeButtons = $('#size-buttons');
   for (const m of SIZE_MODULES) {
@@ -77,6 +98,7 @@ export function initApp() {
   function selectSize(id) {
     mod.current = getSizeModule(id);
     faces = mod.current.emptyFaces();
+    lowConf = emptyLowConf();
     captureIndex = 0;
     [...sizeButtons.children].forEach((b) => {
       if (!b.disabled) b.setAttribute('aria-pressed', String(b.textContent === mod.current.name));
@@ -140,7 +162,13 @@ export function initApp() {
       const sw = el('span', 'swatch');
       sw.style.background = mod.current.colorHex[mod.current.faceColor[f]];
       chip.appendChild(sw);
-      chip.appendChild(el('span', null, mod.current.faceLabels[f]));
+      chip.appendChild(el('span', 'face-chip__name', mod.current.faceLabels[f]));
+      // Non-color "recheck" marker; shown via [data-flag] so it never relies on
+      // hue alone. Kept out of the accessibility tree — the chip's aria-label
+      // carries the word "uncertain" when flagged.
+      const flag = el('span', 'face-chip__flag', '!');
+      flag.setAttribute('aria-hidden', 'true');
+      chip.appendChild(flag);
       chip.addEventListener('click', () => {
         captureIndex = i;
         updateCaptureTarget();
@@ -155,8 +183,18 @@ export function initApp() {
   function refreshFaceProgress() {
     const chips = $('#face-progress').children;
     scanFaces().forEach((f, i) => {
-      chips[i].dataset.active = String(i === captureIndex);
-      chips[i].dataset.done = String(isFaceFilled(f));
+      const chip = chips[i];
+      const flagged = faceHasLowConf(f);
+      chip.dataset.active = String(i === captureIndex);
+      chip.dataset.done = String(isFaceFilled(f));
+      chip.dataset.flag = String(flagged);
+      chip.setAttribute(
+        'aria-label',
+        flagged
+          ? `${mod.current.faceLabels[f]} — scanned, some stickers uncertain, recheck`
+          : mod.current.faceLabels[f]
+      );
+      chip.title = flagged ? 'Some stickers on this face look uncertain — recheck at Verify.' : '';
     });
   }
   function updateCaptureTarget() {
@@ -297,10 +335,14 @@ export function initApp() {
       grid.style.gridTemplateColumns = `repeat(${mod.current.gridN}, 1fr)`;
       for (let i = 0; i < mod.current.gridN * mod.current.gridN; i++) {
         const st = el('button', 'sticker');
-        st.setAttribute('aria-label', `${mod.current.faceLabels[f]} sticker ${i + 1}`);
+        markSticker(st, f, i);
         st.addEventListener('click', () => {
           faces[f][i] = paintColor;
+          // The user just verified this sticker by hand — clear its "recheck"
+          // flag so the highlight and the summary count stay honest.
+          if (lowConf[f]) lowConf[f][i] = false;
           paintSticker(st, paintColor);
+          markSticker(st, f, i);
           refreshFaceProgress();
           validateNow();
         });
@@ -320,12 +362,24 @@ export function initApp() {
       node.dataset.empty = 'false';
     }
   }
+  // Mark (or unmark) a net sticker as a low-confidence scan read: a restrained
+  // ring (CSS, [data-lowconf]) plus a non-visual "recheck" note on its label. A
+  // gentle "look here," not an error — real errors stay the red validation path.
+  function markSticker(node, f, i) {
+    const low = !!(lowConf[f] && lowConf[f][i]);
+    node.dataset.lowconf = String(low);
+    const base = `${mod.current.faceLabels[f]} sticker ${i + 1}`;
+    node.setAttribute('aria-label', low ? `${base}, low-confidence, recheck` : base);
+  }
   function refreshNet() {
     const net = $('#net');
     for (const f of mod.current.faceOrder) {
       const grid = net.querySelector(`.net-face[data-face="${f}"] .sticker-grid`);
       if (!grid) continue;
-      [...grid.children].forEach((st, i) => paintSticker(st, faces[f][i]));
+      [...grid.children].forEach((st, i) => {
+        paintSticker(st, faces[f][i]);
+        markSticker(st, f, i);
+      });
     }
   }
 
@@ -333,7 +387,25 @@ export function initApp() {
   function allFilled() {
     return mod.current.faceOrder.every((f) => isFaceFilled(f));
   }
+  // A gentle, distinct-from-errors summary of scan uncertainty at Verify. It
+  // agrees with the on-net highlights (same lowConf source) and clears itself
+  // as the user repaints flagged stickers.
+  function updateUncertainNote() {
+    const note = $('#uncertain-note');
+    if (!note) return;
+    const n = countUncertainFaces();
+    if (n === 0) {
+      note.hidden = true;
+      note.textContent = '';
+      return;
+    }
+    note.hidden = false;
+    note.textContent =
+      `${n} face${n > 1 ? 's' : ''} look${n > 1 ? '' : 's'} uncertain — the flagged ` +
+      `stickers are highlighted below. Tap any to confirm or repaint it.`;
+  }
   function validateNow() {
+    updateUncertainNote();
     const box = $('#validation');
     const solveBtn = $('#btn-solve');
     if (!allFilled()) {
@@ -424,7 +496,18 @@ export function initApp() {
     if (!samples) return;
     const order = scanFaces();
     const f = order[captureIndex];
-    faces[f] = samples.map((rgb) => mod.current.classifyColor(rgb));
+    // Classify with a confidence margin when the module supports it, so genuinely
+    // ambiguous reads get flagged for a recheck at Verify. Falls back cleanly to
+    // the plain classifier (and no flags) for a module that doesn't opt in.
+    const thr = mod.current.confidenceThreshold ?? 0;
+    if (typeof mod.current.classifyColorDetailed === 'function') {
+      const detailed = samples.map((rgb) => mod.current.classifyColorDetailed(rgb));
+      faces[f] = detailed.map((d) => d.color);
+      lowConf[f] = detailed.map((d) => d.confidence < thr);
+    } else {
+      faces[f] = samples.map((rgb) => mod.current.classifyColor(rgb));
+      lowConf[f] = faces[f].map(() => false);
+    }
     dismissMirrorNudge();
     // advance to next unfilled face
     let next = (captureIndex + 1) % order.length;
@@ -460,6 +543,7 @@ export function initApp() {
   });
   $('#btn-reset').addEventListener('click', () => {
     faces = mod.current.emptyFaces();
+    lowConf = emptyLowConf();
     refreshNet();
     refreshFaceProgress();
     validateNow();
@@ -597,6 +681,7 @@ export function initApp() {
   $('#btn-restart-anim').addEventListener('click', () => jumpTo(0));
   $('#btn-new').addEventListener('click', () => {
     faces = mod.current.emptyFaces();
+    lowConf = emptyLowConf();
     captureIndex = 0;
     solution = null;
     stepIndex = 0;
@@ -629,6 +714,9 @@ export function initApp() {
   window.__solvent = {
     setFaces(next) {
       faces = next;
+      // Manually-injected faces (and the e2e path) carry no scan confidence, so
+      // clear any flags — uncertainty is a camera-only signal.
+      lowConf = emptyLowConf();
       refreshNet();
       refreshFaceProgress();
       validateNow();

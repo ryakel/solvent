@@ -63,22 +63,50 @@ function hexToRgb(hex) {
 }
 const REF_RGB = Object.fromEntries(COLORS.map((c) => [c, hexToRgb(COLOR_HEX[c])]));
 
-// Classify an [r,g,b] sample to the nearest scheme color. Correction is always
-// available, so this only needs to be close; we bias by hue to separate the
-// warm colors (white/yellow/orange/red) that trip up naive RGB distance.
-export function classifyColor([r, g, b]) {
+// Squared, green-weighted distance from a sample to a scheme color. Weighting the
+// green channel a little more separates the warm colors (white/yellow/orange/red)
+// that trip up naive RGB distance.
+function colorDist2([r, g, b], [rr, gg, bb]) {
+  return (r - rr) ** 2 + 1.3 * (g - gg) ** 2 + (b - bb) ** 2;
+}
+
+// Classify a sample AND report how sure we are. `confidence` is the normalized
+// margin between the nearest and second-nearest scheme color:
+//     (d2 - d1) / (d2 + d1)   on root distances, so it is a comparable 0..1
+// signal regardless of a color's absolute separation. ~1 means the sample sits
+// squarely on one color; ~0 means it is a coin-flip between two — a likely
+// misread the UI can surface for a second look. Purely a hint: correction is
+// always available and nothing downstream trusts it.
+export function classifyColorDetailed(rgb) {
   let best = 'W';
   let bestD = Infinity;
+  let secondD = Infinity;
   for (const c of COLORS) {
-    const [rr, gg, bb] = REF_RGB[c];
-    // weight green channel a little more; it discriminates G/Y/O/R well
-    const d = (r - rr) ** 2 + 1.3 * (g - gg) ** 2 + (b - bb) ** 2;
+    const d = colorDist2(rgb, REF_RGB[c]);
     if (d < bestD) {
+      secondD = bestD;
       bestD = d;
       best = c;
+    } else if (d < secondD) {
+      secondD = d;
     }
   }
-  return best;
+  const d1 = Math.sqrt(bestD);
+  const d2 = Math.sqrt(secondD);
+  const confidence = d1 + d2 === 0 ? 1 : (d2 - d1) / (d2 + d1);
+  return { color: best, confidence };
+}
+
+// Below this normalized margin a scan sample is "low confidence" — the two
+// closest scheme colors are near enough that the read could go either way, so
+// the UI flags it for a recheck. Tunable; a hint, never a hard gate.
+export const CONFIDENCE_THRESHOLD = 0.2;
+
+// Classify an [r,g,b] sample to the nearest scheme color. Correction is always
+// available, so this only needs to be close. Kept returning a plain letter for
+// back-compat; opt into the margin with classifyColorDetailed.
+export function classifyColor(rgb) {
+  return classifyColorDetailed(rgb).color;
 }
 
 // Human-readable hint for a move name like "R", "U'", "F2".
@@ -238,6 +266,8 @@ export const size2x2 = {
   emptyFaces,
   validate: validateFaces,
   classifyColor,
+  classifyColorDetailed,
+  confidenceThreshold: CONFIDENCE_THRESHOLD,
   moveToTurn,
   solve,
   // exposed for tests / renderer
