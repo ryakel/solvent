@@ -250,11 +250,13 @@ export function initApp() {
         guide.stop();
       }
     }
-    // Auto-capture only makes sense on the live capture screen.
+    // Auto-capture and the live colour read-out only run on the live capture screen.
     if (name === 'capture') {
       if (autoOn) startAuto();
+      startLive();
     } else {
       stopAuto();
+      stopLive();
     }
     // Solution auto-play must never keep running off-screen.
     if (name !== 'solution') stopPlay();
@@ -265,7 +267,82 @@ export function initApp() {
     const reticle = $('#reticle');
     reticle.style.setProperty('--gn', mod.current.gridN);
     reticle.innerHTML = '';
-    for (let i = 0; i < mod.current.gridN * mod.current.gridN; i++) reticle.appendChild(el('i'));
+    reticle.classList.remove('live');
+    // Each cell carries a live-read chip: a small swatch showing the colour
+    // Solvent currently reads there, so the user can SEE the read before capturing.
+    for (let i = 0; i < mod.current.gridN * mod.current.gridN; i++) {
+      const cell = el('i');
+      cell.appendChild(el('b', 'reticle-chip'));
+      reticle.appendChild(cell);
+    }
+  }
+
+  // ---- live colour read-out ---------------------------------------------------
+  // Whenever the camera is live on the capture screen, sample the reticle a few
+  // times a second and paint each cell's chip with the colour Solvent reads there
+  // (dimmed + marked when the read is low-confidence). This makes the capture
+  // legible: the user adjusts light/angle until the chips are right, then captures.
+  // Fully gated on a live camera, so headless / e2e never starts it.
+  let liveTimer = 0;
+  const LIVE_SAMPLE_MS = 160;
+  function liveActive() {
+    return (
+      scanner &&
+      scanner.isActive() &&
+      screens.capture.classList.contains('is-active') &&
+      (typeof document.hidden === 'undefined' || !document.hidden)
+    );
+  }
+  function clearLiveChips() {
+    const reticle = $('#reticle');
+    reticle.classList.remove('live');
+    reticle.querySelectorAll('.reticle-chip').forEach((chip) => {
+      chip.style.background = '';
+      chip.dataset.low = 'false';
+    });
+  }
+  function liveTick() {
+    if (!liveActive()) return;
+    let samples;
+    try {
+      samples = scanner.sample();
+    } catch {
+      samples = null;
+    }
+    if (!samples || !samples.length) return;
+    const chips = $('#reticle').querySelectorAll('.reticle-chip');
+    const detailed = typeof mod.current.classifyColorDetailed === 'function';
+    const thr = mod.current.confidenceThreshold ?? 0.2;
+    samples.forEach((rgb, i) => {
+      const chip = chips[i];
+      if (!chip) return;
+      let color, low;
+      if (detailed) {
+        const d = mod.current.classifyColorDetailed(rgb);
+        color = d.color;
+        low = d.confidence < thr;
+      } else {
+        color = mod.current.classifyColor(rgb);
+        low = false;
+      }
+      chip.style.background = mod.current.colorHex[color];
+      chip.dataset.low = low ? 'true' : 'false';
+    });
+    $('#reticle').classList.add('live');
+  }
+  function startLive() {
+    if (liveTimer || !liveActive()) return;
+    $('#camera-wrap').classList.add('is-live');
+    liveTimer = setInterval(liveTick, LIVE_SAMPLE_MS);
+    liveTick();
+  }
+  function stopLive() {
+    if (liveTimer) {
+      clearInterval(liveTimer);
+      liveTimer = 0;
+    }
+    $('#camera-wrap').classList.remove('is-live');
+    clearLiveChips();
   }
 
   // ---- face progress chips ----
@@ -609,6 +686,8 @@ export function initApp() {
       // If the user had already opted into auto-capture, begin sampling now that
       // the camera is live.
       if (autoOn) startAuto();
+      // Begin the live per-sticker colour read-out.
+      startLive();
     }
     updateFlashButton();
   }
@@ -912,6 +991,7 @@ export function initApp() {
 
   function goReview() {
     stopAuto();
+    stopLive();
     if (scanner) scanner.stop();
     updateFlashButton();
     buildNet();

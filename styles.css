@@ -225,7 +225,46 @@ h1 {
 .reticle.arrived::after { animation: arrival-tick 600ms ease-out both; }
 .reticle i {
   border: 1px dashed rgba(244, 246, 248, 0.4);
+  position: relative;
 }
+/* Live read-out chip: the colour Solvent currently reads in this cell. Hidden
+   until the live loop paints it (reticle gets .live), so it never shows a stale
+   or empty swatch. A low-confidence read is dimmed and ringed to say "unsure". */
+.reticle-chip {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: clamp(14px, 4.5vmin, 22px);
+  height: clamp(14px, 4.5vmin, 22px);
+  border-radius: 4px;
+  border: 1.5px solid rgba(5, 7, 10, 0.55);
+  box-shadow: 0 0 0 1.5px rgba(244, 246, 248, 0.85);
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.reticle.live .reticle-chip { opacity: 1; }
+.reticle.live .reticle-chip[data-low="true"] {
+  opacity: 0.55;
+  box-shadow: 0 0 0 1.5px var(--c-yellow);
+}
+.live-legend {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(5, 7, 10, 0.62);
+  color: rgba(244, 246, 248, 0.92);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+.camera-wrap.is-live .live-legend { opacity: 1; }
 @keyframes arrival-tick {
   0% { opacity: 0; transform: scale(1.03); }
   22% { opacity: 1; transform: scale(1); }
