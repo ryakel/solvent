@@ -56,6 +56,19 @@
           <div class="camera-wrap" id="camera-wrap">
             <video id="video" playsinline muted aria-label="Camera preview"></video>
             <div class="reticle" id="reticle" aria-hidden="true"></div>
+            <!-- Auto-capture countdown ring: appears only when the "Auto" assist is
+                 on and the frame has held steady + confident. Drawn over the reticle. -->
+            <svg class="auto-ring" id="auto-ring" viewBox="0 0 100 100" aria-hidden="true" hidden>
+              <circle class="auto-ring__track" cx="50" cy="50" r="45" />
+              <circle class="auto-ring__fill" cx="50" cy="50" r="45" pathLength="100" />
+            </svg>
+            <!-- Hold-steady assist: a live "moving / steady" read from the device
+                 motion sensor. Shown only after the user enables it (iOS needs a
+                 tap for permission); hidden on desktop / no sensor. -->
+            <div class="steady-pill" id="steady-pill" data-steady="unknown" hidden aria-hidden="true">
+              <span class="steady-pill__dot"></span>
+              <span class="steady-pill__text" id="steady-pill-text">Hold steady</span>
+            </div>
             <div class="camera-msg" id="camera-msg" hidden></div>
           </div>
 
@@ -95,6 +108,11 @@
             <div class="capture-actions">
               <button class="btn" id="btn-flash" aria-pressed="false" hidden>Flash off</button>
               <button class="btn" id="btn-mirror" aria-pressed="false" title="Turn on if you are scanning with a front / selfie camera — it flips the turn directions to match the mirrored preview.">Mirror: off</button>
+            </div>
+            <div class="capture-actions capture-assist">
+              <button class="btn" id="btn-auto" aria-pressed="false" title="Assistive: when on, Solvent captures the face automatically once it holds steady and the colors read cleanly. Manual capture always works.">Auto: off</button>
+              <button class="btn" id="btn-sound" aria-pressed="false" title="A soft tick plus a haptic buzz each time a face locks in. Off by default.">Sound: off</button>
+              <button class="btn" id="btn-steady" hidden title="Show a live hold-steady indicator using the device motion sensor.">Hold-steady assist</button>
             </div>
             <div class="capture-actions">
               <button class="btn btn--ghost" id="btn-manual">Enter colors by hand</button>
@@ -152,10 +170,12 @@
 
             <div class="stepper">
               <button class="btn" id="btn-prev" aria-label="Previous move">‹ Prev</button>
+              <button class="btn" id="btn-play" aria-pressed="false" aria-label="Play the solution">▶ Play</button>
               <button class="btn btn--primary" id="btn-next" aria-label="Next move">Next ›</button>
             </div>
             <div class="stepper">
               <button class="btn btn--ghost" id="btn-restart-anim">Reset animation</button>
+              <button class="btn btn--ghost" id="btn-copy" aria-label="Copy move list to clipboard">Copy moves</button>
               <button class="btn btn--ghost" id="btn-new">New scan</button>
             </div>
           </div>

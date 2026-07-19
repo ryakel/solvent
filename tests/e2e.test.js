@@ -168,6 +168,58 @@ test('an impossible cube is rejected with a helpful message', async () => {
   }
 });
 
+test('solution auto-play advances to a solved cube and then stops on its own', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext();
+    const errors = [];
+    const page = await context.newPage();
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(m.text());
+    });
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+
+    // A short scramble keeps the auto-play run brief and deterministic.
+    const faces = scrambledFaces(['R', 'U', "R'"]);
+    await page.evaluate((f) => {
+      window.__solvent.goReview();
+      window.__solvent.setFaces(f);
+    }, faces);
+    await page.click('#btn-solve');
+    await page.waitForSelector('#screen-solution.is-active');
+
+    const moveCount = await page.$$eval('#move-list li', (els) => els.length);
+    assert.ok(moveCount > 0, 'expected a non-empty move list');
+
+    // Press Play and let it run to the end untouched.
+    await page.click('#btn-play');
+    await page.waitForFunction(() => window.__solvent.isPlaying() === true, { timeout: 5000 });
+    await page.waitForFunction(
+      () => window.__solvent.currentFrameSolved() && window.__solvent.isPlaying() === false,
+      { timeout: 30000 }
+    );
+
+    // Ended at the last move, stopped, and Next is disabled.
+    const state = await page.evaluate(() => window.__solvent.getState());
+    assert.equal(state.stepIndex, moveCount, 'auto-play should reach the final move');
+    const nextDisabled = await page.$eval('#btn-next', (b) => b.disabled);
+    assert.ok(nextDisabled, 'Next should be disabled once auto-play finishes');
+
+    // Stepping still works after playing.
+    await page.click('#btn-prev');
+    await page.waitForFunction((n) => window.__solvent.getState().stepIndex === n, moveCount - 1);
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
 test('prefers-reduced-motion snaps instead of animating', async () => {
   const { server, port } = await startServer();
   const browser = await launch();

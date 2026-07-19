@@ -34,6 +34,12 @@ export function initApp() {
   let solution = null;
   let stepIndex = 0;
   let animating = false;
+  // Solution auto-play: advances through the moves on a timer, but STRICTLY by
+  // awaiting goNext() each step (never a raw timer that could overlap the
+  // `animating` guard). `playDelayTimer` is the only bare timeout — the cancelable
+  // rest between moves — and it gates the loop rather than triggering a move.
+  let playing = false;
+  let playDelayTimer = 0;
   // Whether the camera preview is mirrored (a selfie / front camera). When on,
   // the preview flips left-for-right, so the guide and the turn wording flip to
   // match. Auto-detected from the camera when possible; also user-toggleable.
@@ -43,10 +49,19 @@ export function initApp() {
   // already turned on. Helps people discover the Mirror toggle without nagging.
   let mirrorNudgeSpent = false;
 
-  // A short haptic tick on discrete, user-initiated confirmations (a face
-  // captured, the set completed). Deliberately never fired by the looping guide,
-  // so it confirms rather than nags. Suppressed under reduced-motion (a proxy
-  // for "keep it calm") and guarded for browsers without the Vibration API.
+  // ---- confirmation feedback: haptic buzz + optional soft audio tick ----------
+  // Fired on discrete, user-initiated confirmations (a face captured, the set
+  // completed) — never by the looping guide, so it confirms rather than nags.
+  // Haptics are on by default (as before); the soft tick is opt-in via one
+  // "Sound" toggle and persisted. Both are suppressed under reduced-motion (a
+  // proxy for "keep it calm") and degrade silently where the API is missing.
+  let soundOn = false;
+  try {
+    soundOn = localStorage.getItem('solvent.sound') === '1';
+  } catch {
+    /* storage blocked (private mode / sandbox) — fall back to the default */
+  }
+
   function haptic(pattern) {
     if (REDUCED_MOTION) return;
     try {
@@ -56,6 +71,92 @@ export function initApp() {
     } catch {
       /* vibration unsupported / blocked — non-essential, ignore */
     }
+  }
+
+  // A single lazily-created AudioContext, only ever touched from inside a user
+  // gesture (the capture click), so autoplay policy never blocks or warns. Any
+  // failure is swallowed — audio is a garnish, never load-bearing.
+  let audioCtx = null;
+  function ensureAudio() {
+    if (REDUCED_MOTION) return null;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+      return audioCtx;
+    } catch {
+      return null;
+    }
+  }
+  // A short sine "tick" (or a two-note chime for the completed set). Synthesized —
+  // no audio files, no network. Kept quiet and brief so it reads as an instrument
+  // confirmation, not an alert.
+  function tick(freq, when, dur, peak) {
+    const ctx = audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, when);
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(peak, when + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(when);
+    osc.stop(when + dur + 0.02);
+  }
+  function blip(kind) {
+    if (!soundOn || REDUCED_MOTION) return;
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    try {
+      const t0 = ctx.currentTime;
+      if (kind === 'complete') {
+        tick(660, t0, 0.12, 0.05);
+        tick(990, t0 + 0.1, 0.16, 0.05); // resolves up — "done"
+      } else {
+        tick(760, t0, 0.09, 0.045);
+      }
+    } catch {
+      /* audio graph unavailable mid-call — ignore */
+    }
+  }
+
+  // The one call the capture paths make: haptic + (opt-in) sound together.
+  function confirmFeedback(kind) {
+    if (kind === 'complete') {
+      haptic([16, 60, 28]); // set complete — a distinct double tick
+      blip('complete');
+    } else {
+      haptic(14); // one face locked in — a single crisp tick
+      blip('tick');
+    }
+  }
+
+  function setSoundButton() {
+    const btn = $('#btn-sound');
+    if (!btn) return;
+    btn.setAttribute('aria-pressed', String(soundOn));
+    btn.textContent = soundOn ? 'Sound: on' : 'Sound: off';
+  }
+  const soundBtn = $('#btn-sound');
+  if (soundBtn) {
+    setSoundButton();
+    soundBtn.addEventListener('click', () => {
+      soundOn = !soundOn;
+      try {
+        localStorage.setItem('solvent.sound', soundOn ? '1' : '0');
+      } catch {
+        /* ignore persistence failure */
+      }
+      // Prime the context inside this gesture and play a confirming tick so the
+      // toggle is audible feedback for itself.
+      if (soundOn) {
+        ensureAudio();
+        blip('tick');
+      }
+      setSoundButton();
+    });
   }
 
   // The active size module owns its own scan path (ordered faces + the single
@@ -89,17 +190,14 @@ export function initApp() {
     b.addEventListener('click', () => selectSize(m.id));
     sizeButtons.appendChild(b);
   }
-  // Placeholder for the next size, to make the seam visible in the UI.
-  const soon = el('button', 'size-btn', '3×3');
-  soon.disabled = true;
-  soon.title = 'Coming via a size module — the flow already supports it.';
-  sizeButtons.appendChild(soon);
 
   function selectSize(id) {
+    if (id === mod.current.id) return;
     mod.current = getSizeModule(id);
     faces = mod.current.emptyFaces();
     lowConf = emptyLowConf();
     captureIndex = 0;
+    solution = null;
     [...sizeButtons.children].forEach((b) => {
       if (!b.disabled) b.setAttribute('aria-pressed', String(b.textContent === mod.current.name));
     });
@@ -107,8 +205,17 @@ export function initApp() {
     buildFaceProgress();
     buildNet();
     buildPalette();
-    // The scan path is per-size; hand the new module's sequence to the guide.
-    if (guide) guide.setSequence(mod.current.scanSequence);
+    // The guide cube and the solution renderer are per-size (grid + geometry), so
+    // rebuild both for the new module. The renderer is recreated lazily on solve.
+    if (guide) {
+      guide.dispose();
+      guide = null;
+      ensureGuide();
+    }
+    if (renderer) {
+      renderer.dispose();
+      renderer = null;
+    }
     updateCaptureTarget();
     showScreen('capture');
   }
@@ -143,6 +250,14 @@ export function initApp() {
         guide.stop();
       }
     }
+    // Auto-capture only makes sense on the live capture screen.
+    if (name === 'capture') {
+      if (autoOn) startAuto();
+    } else {
+      stopAuto();
+    }
+    // Solution auto-play must never keep running off-screen.
+    if (name !== 'solution') stopPlay();
   }
 
   // ---- reticle ----
@@ -244,12 +359,14 @@ export function initApp() {
       guide = createGuide($('#guide-view'), {
         colorHex: mod.current.colorHex,
         reducedMotion: REDUCED_MOTION,
+        cubiesPerEdge: mod.current.cubiesPerEdge,
         scanSequence: mod.current.scanSequence,
         solvedState: mod.current.SOLVED_STATE,
         geomFromState: mod.current.geomFromState,
         onArrive: pulseArrival,
       });
       guide.setMirror(mirror);
+      if (screens.capture.classList.contains('is-active')) guide.start();
     } catch (err) {
       guide = null; // WebGL unavailable: text guidance still covers it.
     }
@@ -486,14 +603,21 @@ export function initApp() {
       // decide — surface the one-time Mirror hint so selfie users aren't stuck
       // with reversed turn directions.
       maybeShowMirrorNudge(fm);
+      // If the user had already opted into auto-capture, begin sampling now that
+      // the camera is live.
+      if (autoOn) startAuto();
     }
     updateFlashButton();
   }
 
-  $('#btn-capture').addEventListener('click', () => {
-    if (!scanner || !scanner.isActive()) return;
+  // The single capture path shared by the manual button and the auto-capture
+  // assist. Samples the reticle, classifies with a confidence margin, advances to
+  // the next unfilled face, and fires the confirmation feedback. Returns true if a
+  // face was recorded. Guarded so it is a no-op without a live camera frame.
+  function commitCapture() {
+    if (!scanner || !scanner.isActive()) return false;
     const samples = scanner.sample();
-    if (!samples) return;
+    if (!samples) return false;
     const order = scanFaces();
     const f = order[captureIndex];
     // Classify with a confidence margin when the module supports it, so genuinely
@@ -518,19 +642,273 @@ export function initApp() {
     captureIndex = next;
     updateCaptureTarget();
     if (allFilled()) {
-      haptic([16, 60, 28]); // set complete — a distinct double tick
+      confirmFeedback('complete');
       goReview();
     } else {
-      haptic(14); // one face locked in — a single crisp tick
+      confirmFeedback('tick');
     }
+    return true;
+  }
+
+  $('#btn-capture').addEventListener('click', () => {
+    commitCapture();
   });
 
   $('#btn-skip-face').addEventListener('click', () => {
+    stopAuto(); // a manual jump: drop any in-progress auto countdown
     captureIndex = (captureIndex + 1) % scanFaces().length;
     updateCaptureTarget();
   });
 
+  // ---- auto-capture assist (opt-in) -----------------------------------------
+  // When enabled AND the camera is live, sample the reticle a few times a second
+  // and, once the frame holds STEADY (low frame-to-frame color change) and reads
+  // CLEANLY (every sticker classifies with high confidence) for a short window,
+  // run an ~0.8s countdown ring and then fire the same commitCapture() the manual
+  // button uses. Any movement resets it; it re-arms only after it sees the cube
+  // move, so it can never double-fire the same face. Entirely gated on a live
+  // camera, so headless / e2e (no camera) never runs a sample or a timer.
+  let autoOn = false;
+  let autoTimer = 0; // setInterval handle for sampling
+  let autoLast = null; // previous sample, for frame-to-frame steadiness
+  let autoSteadyMs = 0; // accumulated steady+confident time
+  let autoArmed = true; // must see movement before it can fire again
+  let autoCountdownStart = 0; // performance.now() when the ring began, else 0
+  const AUTO_SAMPLE_MS = 180; // ~5.5 samples/sec — responsive but battery-light
+  const AUTO_HOLD_MS = 480; // steady+confident this long before the ring starts
+  const AUTO_COUNTDOWN_MS = 800; // ring fill duration
+  const AUTO_STEADY_EPS = 15; // mean per-channel delta below this = "not moving"
+  const AUTO_MIN_CONF = 0.32; // every sticker must beat this margin to count
+
+  const autoRing = $('#auto-ring');
+  const autoRingFill = autoRing ? autoRing.querySelector('.auto-ring__fill') : null;
+  function setAutoRing(p) {
+    // p in [0,1]; pathLength is 100, dashoffset 100 -> 0 as it fills.
+    if (!autoRing || !autoRingFill) return;
+    if (p == null) {
+      autoRing.hidden = true;
+      return;
+    }
+    autoRing.hidden = false;
+    autoRingFill.style.strokeDashoffset = String(100 * (1 - p));
+  }
+  function autoActive() {
+    return (
+      autoOn &&
+      scanner &&
+      scanner.isActive() &&
+      screens.capture.classList.contains('is-active') &&
+      (typeof document.hidden === 'undefined' || !document.hidden)
+    );
+  }
+  function resetAutoProgress() {
+    autoSteadyMs = 0;
+    autoCountdownStart = 0;
+    setAutoRing(null);
+  }
+  function startAuto() {
+    if (autoTimer || !autoActive()) return;
+    autoLast = null;
+    autoArmed = true;
+    resetAutoProgress();
+    autoTimer = setInterval(autoTick, AUTO_SAMPLE_MS);
+  }
+  function stopAuto() {
+    if (autoTimer) {
+      clearInterval(autoTimer);
+      autoTimer = 0;
+    }
+    autoLast = null;
+    resetAutoProgress();
+  }
+  function autoTick() {
+    if (!autoActive()) {
+      resetAutoProgress();
+      return;
+    }
+    let samples;
+    try {
+      samples = scanner.sample();
+    } catch {
+      samples = null;
+    }
+    if (!samples || !samples.length) return;
+
+    // Confidence: the weakest sticker gates the whole face.
+    let minConf = 1;
+    if (typeof mod.current.classifyColorDetailed === 'function') {
+      for (const rgb of samples) {
+        const c = mod.current.classifyColorDetailed(rgb).confidence;
+        if (c < minConf) minConf = c;
+      }
+    }
+    // Steadiness: mean absolute per-channel change vs the previous sample.
+    let steady = false;
+    if (autoLast && autoLast.length === samples.length) {
+      let tot = 0;
+      let n = 0;
+      for (let i = 0; i < samples.length; i++) {
+        for (let c = 0; c < 3; c++) {
+          tot += Math.abs(samples[i][c] - autoLast[i][c]);
+          n++;
+        }
+      }
+      steady = n > 0 && tot / n < AUTO_STEADY_EPS;
+    }
+    autoLast = samples;
+
+    const aligned = steady && minConf >= AUTO_MIN_CONF;
+    if (!aligned) {
+      // Movement (or a poor read) — this is what re-arms a fresh capture.
+      autoArmed = true;
+      resetAutoProgress();
+      return;
+    }
+    if (!autoArmed) {
+      // Still parked on the face we just captured; wait for the user to turn it.
+      resetAutoProgress();
+      return;
+    }
+    autoSteadyMs += AUTO_SAMPLE_MS;
+    if (autoSteadyMs < AUTO_HOLD_MS) return;
+    if (!autoCountdownStart) autoCountdownStart = performance.now();
+    const p = Math.min(1, (performance.now() - autoCountdownStart) / AUTO_COUNTDOWN_MS);
+    setAutoRing(p);
+    if (p >= 1) {
+      autoArmed = false; // require movement before the next auto fire
+      resetAutoProgress();
+      commitCapture();
+    }
+  }
+
+  const autoBtn = $('#btn-auto');
+  function setAutoButton() {
+    if (!autoBtn) return;
+    autoBtn.setAttribute('aria-pressed', String(autoOn));
+    autoBtn.textContent = autoOn ? 'Auto: on' : 'Auto: off';
+  }
+  if (autoBtn) {
+    autoBtn.addEventListener('click', () => {
+      autoOn = !autoOn;
+      setAutoButton();
+      if (autoOn) startAuto();
+      else stopAuto();
+    });
+  }
+  // Pause sampling when the tab is backgrounded; resume when it returns.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopAuto();
+    else if (autoOn) startAuto();
+  });
+
+  // ---- hold-steady assist (opt-in, device-motion) ----------------------------
+  // A deliberately modest reading: NOT "hold the phone level" (people scan from
+  // any angle), but "is the phone moving or still right now?" — derived from the
+  // gyroscope's rotation-rate magnitude, which is independent of how the phone is
+  // held and of the screen orientation, so there is no axis-remapping to get
+  // wrong. Shown only after an explicit tap (iOS requires the gesture to grant
+  // permission) and only where the sensor plausibly exists; hidden on desktop /
+  // when no motion ever arrives, so it never clutters a machine that can't use it.
+  const steadyPill = $('#steady-pill');
+  const steadyText = $('#steady-pill-text');
+  const steadyBtn = $('#btn-steady');
+  let steadyOn = false;
+  let steadyRate = 0; // smoothed rotation-rate magnitude (deg/s)
+  let steadyGotEvent = false; // have we ever received a non-trivial motion sample?
+  const STEADY_THRESHOLD = 12; // deg/s below which we call it "steady"
+
+  const motionSupported =
+    typeof window !== 'undefined' &&
+    typeof window.DeviceMotionEvent !== 'undefined' &&
+    // Only surface on touch-like devices; keeps it off desktop/headless.
+    (window.matchMedia?.('(pointer: coarse)')?.matches ||
+      typeof window.DeviceMotionEvent.requestPermission === 'function');
+
+  function paintSteady() {
+    if (!steadyPill) return;
+    if (!steadyOn) {
+      steadyPill.hidden = true;
+      return;
+    }
+    steadyPill.hidden = false;
+    if (!steadyGotEvent) {
+      steadyPill.dataset.steady = 'unknown';
+      if (steadyText) steadyText.textContent = 'Sensing…';
+      return;
+    }
+    const still = steadyRate < STEADY_THRESHOLD;
+    steadyPill.dataset.steady = still ? 'steady' : 'moving';
+    if (steadyText) steadyText.textContent = still ? 'Steady' : 'Hold steady';
+  }
+
+  function onMotion(e) {
+    const r = e && e.rotationRate;
+    if (!r) return;
+    const mag = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);
+    // Some browsers emit a constant-zero event when there is truly no sensor;
+    // treat only a real, non-zero reading as proof the sensor is live.
+    if (mag > 0.001) steadyGotEvent = true;
+    // Low-pass so the pill doesn't flicker on tiny tremors.
+    steadyRate += (mag - steadyRate) * 0.3;
+    paintSteady();
+  }
+
+  function enableSteady() {
+    steadyOn = true;
+    steadyGotEvent = false;
+    steadyRate = 0;
+    window.addEventListener('devicemotion', onMotion);
+    if (steadyBtn) {
+      steadyBtn.setAttribute('aria-pressed', 'true');
+      steadyBtn.textContent = 'Hold-steady: on';
+    }
+    paintSteady();
+    // If nothing ever arrives (permission-less desktop that still has the API),
+    // quietly retire the control rather than leave a dead "Sensing…" pill.
+    setTimeout(() => {
+      if (steadyOn && !steadyGotEvent) disableSteady(true);
+    }, 2500);
+  }
+  function disableSteady(retire) {
+    steadyOn = false;
+    window.removeEventListener('devicemotion', onMotion);
+    if (steadyPill) steadyPill.hidden = true;
+    if (steadyBtn) {
+      steadyBtn.setAttribute('aria-pressed', 'false');
+      steadyBtn.textContent = 'Hold-steady assist';
+      if (retire) steadyBtn.hidden = true; // no live sensor — stop offering it
+    }
+  }
+
+  if (steadyBtn && motionSupported) {
+    steadyBtn.hidden = false;
+    steadyBtn.setAttribute('aria-pressed', 'false');
+    steadyBtn.addEventListener('click', async () => {
+      if (steadyOn) {
+        disableSteady(false);
+        return;
+      }
+      // iOS 13+ gates the sensor behind an explicit permission prompt that must
+      // be triggered from a user gesture (this click).
+      try {
+        const req = window.DeviceMotionEvent.requestPermission;
+        if (typeof req === 'function') {
+          const res = await req();
+          if (res !== 'granted') {
+            if (steadyText) steadyText.textContent = 'Motion access denied';
+            return;
+          }
+        }
+      } catch {
+        /* requestPermission threw (not in a gesture, unsupported) — bail quietly */
+        return;
+      }
+      enableSteady();
+    });
+  }
+
   function goReview() {
+    stopAuto();
     if (scanner) scanner.stop();
     updateFlashButton();
     buildNet();
@@ -586,9 +964,15 @@ export function initApp() {
   }
 
   function openSolution() {
+    playing = false;
     showScreen('solution');
     stepIndex = 0;
     ensureRenderer();
+    const copyBtn = $('#btn-copy');
+    if (copyBtn) {
+      copyBtn.disabled = !solution || solution.moves.length === 0;
+      copyBtn.textContent = 'Copy moves';
+    }
     if (renderer) renderer.setGeom(solution.frames[0]);
     buildMoveList();
     updateSolveReadout();
@@ -610,7 +994,10 @@ export function initApp() {
       const li = el('li', null, m.name);
       li.dataset.state = 'todo';
       li.title = m.hint;
-      li.addEventListener('click', () => jumpTo(i + 1));
+      li.addEventListener('click', () => {
+        stopPlay();
+        jumpTo(i + 1);
+      });
       list.appendChild(li);
     });
   }
@@ -637,6 +1024,16 @@ export function initApp() {
   function updateStepButtons() {
     $('#btn-prev').disabled = animating || stepIndex <= 0;
     $('#btn-next').disabled = animating || stepIndex >= solution.moves.length;
+    updatePlayButton();
+  }
+  function updatePlayButton() {
+    const btn = $('#btn-play');
+    if (!btn) return;
+    // Nothing to play for an already-solved cube (empty move list).
+    btn.disabled = !solution || solution.moves.length === 0;
+    btn.setAttribute('aria-pressed', String(playing));
+    btn.textContent = playing ? '❚❚ Pause' : '▶ Play';
+    btn.setAttribute('aria-label', playing ? 'Pause the solution' : 'Play the solution');
   }
 
   async function goNext() {
@@ -676,10 +1073,117 @@ export function initApp() {
     }
   }
 
-  $('#btn-next').addEventListener('click', goNext);
-  $('#btn-prev').addEventListener('click', goPrev);
-  $('#btn-restart-anim').addEventListener('click', () => jumpTo(0));
+  // ---- solution auto-play -----------------------------------------------------
+  // Runs entirely through goNext()'s promise: await one move, rest for a beat,
+  // repeat, until paused or the end is reached. The rest is a single cancelable
+  // timeout that only GATES the loop — it never triggers a move itself, so the
+  // `animating` guard can never be raced. Under reduced motion each goNext()
+  // resolves instantly (ANIM_MS = 0), so a short rest keeps it legible.
+  function stopPlay() {
+    if (!playing && !playDelayTimer) return;
+    playing = false;
+    if (playDelayTimer) {
+      clearTimeout(playDelayTimer);
+      playDelayTimer = 0;
+    }
+    updatePlayButton();
+  }
+  function restRoughly(ms) {
+    return new Promise((resolve) => {
+      playDelayTimer = setTimeout(() => {
+        playDelayTimer = 0;
+        resolve();
+      }, ms);
+    });
+  }
+  async function playLoop() {
+    while (playing && stepIndex < solution.moves.length) {
+      await goNext();
+      if (!playing) break;
+      await restRoughly(REDUCED_MOTION ? 140 : 460);
+    }
+    // Reached the end (or was paused mid-rest): settle the button state.
+    playing = false;
+    updatePlayButton();
+    updateStepButtons();
+  }
+  function togglePlay() {
+    if (!solution || solution.moves.length === 0) return;
+    if (playing) {
+      stopPlay();
+      return;
+    }
+    // Starting from the end replays from the top.
+    if (stepIndex >= solution.moves.length) {
+      stepIndex = 0;
+      if (renderer) renderer.setGeom(solution.frames[0]);
+      updateSolveReadout();
+    }
+    playing = true;
+    updatePlayButton();
+    playLoop();
+  }
+
+  // ---- copy move list ---------------------------------------------------------
+  let copyResetTimer = 0;
+  function fallbackCopy(text) {
+    // execCommand path for browsers without the async clipboard API (or when it
+    // is blocked by an insecure context). Best-effort; returns success.
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand && document.execCommand('copy');
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch {
+      return false;
+    }
+  }
+  async function copyMoves() {
+    if (!solution || solution.moves.length === 0) return;
+    const text = solution.moves.map((m) => m.name).join(' ');
+    let ok = false;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch {
+      ok = false; // permission denied / insecure context — fall through
+    }
+    if (!ok) ok = fallbackCopy(text);
+    const btn = $('#btn-copy');
+    if (btn) {
+      btn.textContent = ok ? 'Copied ✓' : 'Copy unavailable';
+      clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => {
+        btn.textContent = 'Copy moves';
+      }, 1500);
+    }
+  }
+
+  $('#btn-next').addEventListener('click', () => {
+    stopPlay();
+    goNext();
+  });
+  $('#btn-prev').addEventListener('click', () => {
+    stopPlay();
+    goPrev();
+  });
+  $('#btn-play').addEventListener('click', togglePlay);
+  $('#btn-copy').addEventListener('click', copyMoves);
+  $('#btn-restart-anim').addEventListener('click', () => {
+    stopPlay();
+    jumpTo(0);
+  });
   $('#btn-new').addEventListener('click', () => {
+    stopPlay();
     faces = mod.current.emptyFaces();
     lowConf = emptyLowConf();
     captureIndex = 0;
@@ -695,8 +1199,14 @@ export function initApp() {
   // keyboard stepping
   document.addEventListener('keydown', (e) => {
     if (!screens.solution.classList.contains('is-active')) return;
-    if (e.key === 'ArrowRight') goNext();
-    if (e.key === 'ArrowLeft') goPrev();
+    if (e.key === 'ArrowRight') {
+      stopPlay();
+      goNext();
+    }
+    if (e.key === 'ArrowLeft') {
+      stopPlay();
+      goPrev();
+    }
   });
 
   // ---- boot ----
@@ -732,5 +1242,8 @@ export function initApp() {
       const geom = solution.frames[stepIndex];
       return isSolved(stateFromGeom(geom));
     },
+    // Auto-play state, so the e2e can click Play and assert it reaches solved
+    // then stops on its own.
+    isPlaying: () => playing,
   };
 }

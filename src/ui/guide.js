@@ -32,7 +32,13 @@ export function createGuide(container, opts) {
   const colorHex = opts.colorHex;
   const reducedMotion = !!opts.reducedMotion;
   const onArrive = typeof opts.onArrive === 'function' ? opts.onArrive : () => {};
-  const cubie = 0.94;
+  // Size-adaptive: keep the demo cube the same overall size for any N (so the
+  // arrows, which wrap its outer extent, stay correct). For N=2, CELL=1 and
+  // cubie=0.94 — identical to before.
+  const cubiesPerEdge = opts.cubiesPerEdge || 2;
+  const CELL = 2 / cubiesPerEdge;
+  const cubie = CELL * 0.94;
+  const posScale = (CELL * (cubiesPerEdge - 1)) / 2; // geom coord -> cube-frame position
 
   // The demo cube geometry is built from the size module's solved state so the
   // guide always matches the cube being scanned.
@@ -101,7 +107,7 @@ export function createGuide(container, opts) {
       tile.lookAt(tile.position.clone().multiplyScalar(2));
       g.add(tile);
     }
-    g.position.set(c.pos[0] * 0.5, c.pos[1] * 0.5, c.pos[2] * 0.5);
+    g.position.set(c.pos[0] * posScale, c.pos[1] * posScale, c.pos[2] * posScale);
     cube.add(g);
   }
 
@@ -418,5 +424,15 @@ export function createGuide(container, opts) {
 
   setSequence(opts.scanSequence || []);
 
-  return { showStep, setSequence, setMirror, start, stop, resize };
+  // Tear the guide down so it can be rebuilt for a different cube size.
+  function dispose() {
+    stop();
+    ro.disconnect();
+    renderer.dispose();
+    if (renderer.domElement.parentNode) {
+      renderer.domElement.parentNode.removeChild(renderer.domElement);
+    }
+  }
+
+  return { showStep, setSequence, setMirror, start, stop, resize, dispose };
 }

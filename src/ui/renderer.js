@@ -48,9 +48,11 @@ export function createRenderer(container, opts) {
   spin.add(cubeGroup);
   spin.rotation.set(-0.15, -0.5, 0);
 
-  const SPACING = 1.0;
-  const CUBIE = 0.94;
-  const offset = (cubiesPerEdge - 1) / 2; // center the cube on origin
+  // Size-adaptive geometry: keep the whole cube ~2 world units across for any N,
+  // so 2x2 and 3x3 fill the viewer the same. For N=2 this reproduces the earlier
+  // constants exactly (CELL=1, CUBIE=0.94, cubie centers at +/-0.5).
+  const CELL = 2 / cubiesPerEdge; // per-cubie footprint in world units
+  const CUBIE = CELL * 0.94; // body size, leaving a small gap between cubies
 
   const bodyMat = new THREE.MeshStandardMaterial({
     color: 0x0b0d11,
@@ -74,10 +76,11 @@ export function createRenderer(container, opts) {
 
   let cubies = []; // { mesh, pos:[x,y,z] } in cube coordinates (integers, centered)
 
-  // Convert a geometry cubie position (values like -1..1 in steps of 2 for 2x2)
-  // to a scene coordinate. geom positions for 2x2 are +/-1; generalize by index.
+  // Geometry coords are symmetric about 0: 2x2 in {-1,1}, 3x3 in {-1,0,1}.
+  // Adjacent coords differ by 2/(N-1); scale so adjacent cubie centers sit CELL
+  // apart, which keeps the overall cube the same size for any N.
   function toScene(p) {
-    return p * (SPACING / 2) * (cubiesPerEdge === 2 ? 1 : 1);
+    return (p * CELL * (cubiesPerEdge - 1)) / 2;
   }
 
   function disposeCubies() {

@@ -235,6 +235,92 @@ h1 {
   .reticle.arrived::after,
   .guide-stage.arrived::after { animation: none; }
 }
+/* Auto-capture countdown ring: a thin blue arc that sweeps closed over ~0.8s once
+   the frame holds steady and reads cleanly, then fires the capture. Sized to sit
+   just outside the reticle so it frames the shot rather than obscuring it. */
+.auto-ring {
+  position: absolute;
+  inset: 16%;
+  pointer-events: none;
+  overflow: visible;
+  transform: rotate(-90deg); /* start the sweep from 12 o'clock */
+}
+/* An author `display` beats the UA [hidden] rule, so restore it explicitly. */
+.auto-ring[hidden] { display: none; }
+.auto-ring__track,
+.auto-ring__fill {
+  fill: none;
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+.auto-ring__track { stroke: rgba(43, 127, 255, 0.18); }
+.auto-ring__fill {
+  stroke: var(--c-blue);
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100; /* JS drives 100 -> 0 as the countdown fills */
+  filter: drop-shadow(0 0 3px rgba(43, 127, 255, 0.5));
+}
+
+/* Hold-steady indicator: a compact instrument pill in the corner of the preview.
+   Amber while the phone is moving, green once it settles — a "moving / steady"
+   read, never a "hold it level" demand. Driven by the device motion sensor. */
+.steady-pill {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: rgba(18, 21, 26, 0.72);
+  border: 1px solid var(--line-2);
+  backdrop-filter: blur(2px);
+}
+.steady-pill[hidden] { display: none; }
+.steady-pill__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  flex: 0 0 auto;
+  transition: background 0.2s;
+}
+.steady-pill[data-steady="moving"] { border-color: rgba(245, 197, 24, 0.5); }
+.steady-pill[data-steady="moving"] .steady-pill__dot { background: var(--c-yellow); }
+.steady-pill[data-steady="steady"] { border-color: rgba(46, 194, 126, 0.55); }
+.steady-pill[data-steady="steady"] .steady-pill__dot {
+  background: var(--c-green);
+  box-shadow: 0 0 6px rgba(46, 194, 126, 0.7);
+}
+
+/* Assistive-toggle row (Auto / Sound / Steady): quieter than the primary actions,
+   and each lights its own accent when engaged so state is never color-only. */
+#btn-auto[aria-pressed="true"] {
+  border-color: var(--c-green);
+  color: var(--ink);
+  background: rgba(46, 194, 126, 0.14);
+  font-weight: 600;
+}
+#btn-sound[aria-pressed="true"] {
+  border-color: var(--c-blue);
+  color: var(--ink);
+  background: rgba(43, 127, 255, 0.14);
+  font-weight: 600;
+}
+#btn-play[aria-pressed="true"] {
+  border-color: var(--c-green);
+  color: var(--ink);
+  background: rgba(46, 194, 126, 0.14);
+  font-weight: 600;
+}
+
 .camera-msg {
   position: absolute;
   inset: 0;
