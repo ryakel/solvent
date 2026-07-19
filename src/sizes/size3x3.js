@@ -70,6 +70,17 @@ function parseMove(name) {
   return { face, times };
 }
 
+const CENTER = Math.floor((N * N) / 2); // middle cell = this face's fixed center color
+
+// The center color on each face of the scanned cube. A 3x3's centers never move,
+// so these are exactly the colors the solved cube will show on each face — the
+// anchor for "hold it like this" and for naming which face each move turns.
+function faceCenters(faces) {
+  const map = {};
+  for (const f of FACE_ORDER) map[f] = faces[f][CENTER];
+  return map;
+}
+
 // Solve from a validated faces object. Returns everything the UI needs:
 //   moves: [{ name, hint }]
 //   frames: geometry after each step, starting from the scanned scramble
@@ -91,6 +102,9 @@ function solve(faces) {
   // inverted). We render by simulating those physical turns on the user's ACTUAL
   // scanned geometry, so the on-screen cube and colors match the cube in hand and
   // end solved.
+  const faceColors = faceCenters(faces);
+  const hold = { up: faceColors.U, front: faceColors.F };
+
   if (a.mirror) {
     const physMoves = moves.map((m) => reflectMoveName[m]);
     let g = geomFromRawFaces(a.rawFaces);
@@ -104,6 +118,8 @@ function solve(faces) {
       moves: physMoves.map((name) => ({ name, hint: moveHint(name) })),
       frames,
       normalizedGeom: frames[0],
+      hold,
+      faceColors,
       mirror: true,
       warning: a.warning,
     };
@@ -119,6 +135,8 @@ function solve(faces) {
     moves: moves.map((name) => ({ name, hint: moveHint(name) })),
     frames,
     normalizedGeom: frames[0],
+    hold,
+    faceColors,
     mirror: false,
     warning: null,
   };

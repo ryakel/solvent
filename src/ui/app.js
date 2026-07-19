@@ -985,8 +985,9 @@ export function initApp() {
     } else {
       lede.textContent = `Solution in ${solution.moves.length} move${
         solution.moves.length > 1 ? 's' : ''
-      }. Step through with Next, or drag the cube to look around.`;
+      }. Set the cube up as below, then step through with Next.`;
     }
+    renderSetupCard();
     // Carry the mirror-scheme heads-up onto the solution screen too, so the note
     // stays visible while the user follows the moves.
     let mnote = $('#solution-mirror-note');
@@ -1004,13 +1005,72 @@ export function initApp() {
     updateStepButtons();
   }
 
+  // ---- crystal-clear turn wording -------------------------------------------
+  // Name the face by its own colour when we have it (3x3 centres), and always say
+  // the turn direction the way a person reads it: looking straight at that face.
+  function moveDir(name) {
+    const s = name.slice(1);
+    return s === "'" ? 'counter-clockwise' : s === '2' ? 'a half turn (180°)' : 'clockwise';
+  }
+  function moveText(name, withConvention) {
+    const face = name[0];
+    const label = mod.current.faceLabels[face].toLowerCase();
+    const fc = solution.faceColors && solution.faceColors[face];
+    const faceName = fc ? `${mod.current.colorNames[fc]} face (the ${label})` : `${label} face`;
+    const conv = withConvention && name.slice(1) !== '2' ? ', looking straight at it' : '';
+    return `turn the ${faceName} ${moveDir(name)}${conv}`;
+  }
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  // The "Set up your cube" card: how to orient the physical cube before move 1.
+  // The on-screen 3D cube (in the user's own colours) is the definitive anchor;
+  // for a 3x3 we also name the up/front centre colours as a quick shortcut.
+  function renderSetupCard() {
+    const screen = $('#screen-solution');
+    let card = $('#solution-setup');
+    if (!solution || solution.moves.length === 0) {
+      if (card) card.hidden = true;
+      return;
+    }
+    if (!card) {
+      card = el('div', 'setup-card');
+      card.id = 'solution-setup';
+      const grid = screen.querySelector('.solve-grid');
+      screen.insertBefore(card, grid);
+    }
+    card.hidden = false;
+    card.innerHTML = '';
+    card.appendChild(el('span', 'setup-card__label', 'Set up your cube'));
+    card.appendChild(
+      el(
+        'p',
+        'setup-card__text',
+        'Turn your real cube so every side matches the cube on screen — drag the cube to check all six faces. Hold that exact grip for the whole solution; the turn directions only work from this one starting position.'
+      )
+    );
+    if (solution.hold) {
+      const row = el('div', 'setup-card__hold');
+      const chip = (color, where) => {
+        const c = el('span', 'setup-chip');
+        const dot = el('i', 'face-dot');
+        dot.style.background = mod.current.colorHex[color];
+        c.appendChild(dot);
+        c.appendChild(el('span', null, `${mod.current.colorNames[color]} ${where}`));
+        return c;
+      };
+      row.appendChild(chip(solution.hold.up, 'on top'));
+      row.appendChild(chip(solution.hold.front, 'facing you'));
+      card.appendChild(row);
+    }
+  }
+
   function buildMoveList() {
     const list = $('#move-list');
     list.innerHTML = '';
     solution.moves.forEach((m, i) => {
       const li = el('li', null, m.name);
       li.dataset.state = 'todo';
-      li.title = m.hint;
+      li.title = cap(moveText(m.name, false));
       li.addEventListener('click', () => {
         stopPlay();
         jumpTo(i + 1);
@@ -1029,12 +1089,11 @@ export function initApp() {
     const hint = $('#move-hint');
     if (solution.moves.length === 0) {
       hint.textContent = 'Already solved.';
-    } else if (stepIndex === 0) {
-      hint.textContent = `Next: ${solution.moves[0].hint}`;
     } else if (stepIndex >= solution.moves.length) {
       hint.textContent = 'Solved. Six solid faces.';
     } else {
-      hint.textContent = `Next: ${solution.moves[stepIndex].hint}`;
+      const name = solution.moves[stepIndex].name;
+      hint.textContent = `Next — ${name}: ${moveText(name, true)}.`;
     }
     refreshMoveList();
   }

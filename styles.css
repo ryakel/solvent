@@ -667,6 +667,41 @@ h1 {
   cursor: grab;
 }
 .viewer:active { cursor: grabbing; }
+/* "Set up your cube" card — the starting-orientation anchor before move 1. */
+.setup-card {
+  margin: 0 0 18px;
+  border: 1px solid rgba(43,127,255,0.4);
+  border-left: 3px solid var(--c-blue);
+  background: rgba(43,127,255,0.07);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.setup-card__label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--c-blue);
+  margin-bottom: 6px;
+}
+.setup-card__text { margin: 0; font-size: 14px; color: var(--ink); line-height: 1.5; }
+.setup-card__hold { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; }
+.setup-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.setup-chip .face-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  flex: 0 0 auto;
+}
+
 .solve-side { display: flex; flex-direction: column; gap: 14px; }
 .move-readout {
   border: 1px solid var(--line);

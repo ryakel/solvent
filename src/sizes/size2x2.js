@@ -300,6 +300,10 @@ function solve(faces) {
     moves: moves.map((name) => ({ name, hint: moveHint(name) })),
     frames,
     normalizedGeom: frames[0],
+    // A 2x2 has no centers to name a face by, so the on-screen cube is the only
+    // orientation anchor: the UI tells the user to match their cube to the screen.
+    hold: null,
+    faceColors: null,
   };
 }
 
