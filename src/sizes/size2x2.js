@@ -16,15 +16,24 @@ import {
   SOLVED,
   applyMove,
   geomFromState,
+  stateFromGeom,
 } from '../core/cube2.js';
 import {
   faceColorsFromState,
   stateFromFaces,
   validateFaces,
+  geomFromFaces,
   SOLVED_FACES,
+  MIRROR_NOTE,
   N,
 } from '../core/facelet.js';
 import { solve as solveState } from '../core/solver2.js';
+import {
+  isMirror2,
+  reflectXGeom,
+  alignGeom,
+  findMove,
+} from '../core/mirror2.js';
 
 // Palette (mirrors DESIGN.md). Used for the 3D stickers, the correction grid,
 // and camera color classification.
@@ -288,6 +297,36 @@ function emptyFaces() {
 //   frames: geometry after each step, starting from the normalized scramble
 //   normalizedGeom: the scramble as rendered (reference corner fixed)
 function solve(faces) {
+  const rawGeom = geomFromFaces(faces);
+
+  // Mirror-scheme cube: the compact state can't encode its handedness, so solving
+  // it directly mis-solves. Reflect it into the standard frame, solve there, then
+  // align the solved frames back onto the user's actual cube and read each physical
+  // move off consecutive frames — so colours, orientation, and moves all match the
+  // cube in hand and end solved. (See core/mirror2.js.)
+  if (isMirror2(rawGeom)) {
+    const { normalized, moves } = solveState(stateFromGeom(reflectXGeom(rawGeom)));
+    const canon = [geomFromState(normalized)];
+    let s = normalized;
+    for (const m of moves) {
+      s = applyMove(s, m);
+      canon.push(geomFromState(s));
+    }
+    const toUser = alignGeom(canon[0], rawGeom);
+    const frames = canon.map(toUser);
+    const names = [];
+    for (let k = 0; k < frames.length - 1; k++) names.push(findMove(frames[k], frames[k + 1]));
+    return {
+      moves: names.map((name) => ({ name, hint: moveHint(name) })),
+      frames,
+      normalizedGeom: frames[0],
+      hold: null,
+      faceColors: null,
+      mirror: true,
+      warning: MIRROR_NOTE,
+    };
+  }
+
   const raw = stateFromFaces(faces);
   const { normalized, moves } = solveState(raw);
   const frames = [geomFromState(normalized)];
@@ -304,6 +343,8 @@ function solve(faces) {
     // orientation anchor: the UI tells the user to match their cube to the screen.
     hold: null,
     faceColors: null,
+    mirror: false,
+    warning: null,
   };
 }
 

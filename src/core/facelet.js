@@ -11,6 +11,15 @@
 
 import { FACES, FACE_ORDER, COLORS, SLOTS, solvedGeom } from './geometry.js';
 import { SOLVED, geomFromState, stateFromGeom, statesEqual } from './cube2.js';
+import { isMirror2, reflectXGeom } from './mirror2.js';
+
+// A 2x2 has no centres, so a mirror-scheme (left-handed) cube is a real, solvable
+// cube — we accept and solve it. The note lets a user who actually mirrored a
+// standard cube during entry notice the difference.
+export const MIRROR_NOTE =
+  'This 2×2 reads as a mirror-image (left-handed) colour scheme. It is a real cube ' +
+  'and the solution is correct — just orient your cube to match the one on screen. ' +
+  'If your cube is a standard scheme, some stickers were likely mirrored in entry.';
 
 export const N = 2; // stickers per face edge (2x2). The size module carries this.
 
@@ -66,7 +75,7 @@ export function faceColorsFromState(state) {
 export const SOLVED_FACES = faceColorsFromState(SOLVED);
 
 // faces -> geometry (may be an invalid cube; validate first).
-function geomFromFaces(faces) {
+export function geomFromFaces(faces) {
   return SLOTS.map((slot, j) => {
     const stickers = [];
     for (let axis = 0; axis < 3; axis++) {
@@ -170,8 +179,13 @@ export function validateFaces(faces) {
   if (errors.length) return { ok: false, errors: dedupe(errors) };
 
   // 5. Orientation parity: total corner twist must be 0 mod 3 (a single twisted
-  //    corner is unsolvable).
-  const state = stateFromGeom(geomFromFaces(faces));
+  //    corner is unsolvable). A 2x2 has no centres, so a globally left-handed
+  //    (mirror) cube is real and solvable; the compact state can't encode its
+  //    handedness, so we measure the twist in the correct frame — reflecting a
+  //    mirror cube into the standard frame first.
+  const geom = geomFromFaces(faces);
+  const mirror = isMirror2(geom);
+  const state = stateFromGeom(mirror ? reflectXGeom(geom) : geom);
   const twist = state.co.reduce((a, b) => a + b, 0) % 3;
   if (twist !== 0) {
     errors.push(
@@ -179,7 +193,13 @@ export function validateFaces(faces) {
     );
   }
 
-  return { ok: errors.length === 0, errors: dedupe(errors) };
+  const ok = errors.length === 0;
+  return {
+    ok,
+    errors: dedupe(errors),
+    mirror: ok ? mirror : false,
+    warning: ok && mirror ? MIRROR_NOTE : null,
+  };
 }
 
 function dedupe(arr) {
