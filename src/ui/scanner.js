@@ -24,11 +24,44 @@ export function createScanner({ video, gridN }) {
       await video.play().catch(() => {});
       track = stream.getVideoTracks()[0] || null;
       torchOn = false;
+      enableAutoExposure();
       return true;
     } catch (err) {
       stream = null;
       track = null;
       return false;
+    }
+  }
+
+  // Ask the camera to keep auto-exposing and auto-white-balancing so the preview
+  // adapts as the user adds light (rather than locking to a dim first frame).
+  // Fully feature-detected against getCapabilities() and wrapped so it no-ops
+  // cleanly where unsupported — most desktops and headless Chromium expose
+  // neither capability. We never hard-set a fixed exposure or brightness.
+  function enableAutoExposure() {
+    if (!track || !track.getCapabilities || !track.applyConstraints) return;
+    let caps;
+    try {
+      caps = track.getCapabilities();
+    } catch {
+      return;
+    }
+    if (!caps) return;
+    const advanced = [];
+    if (Array.isArray(caps.exposureMode) && caps.exposureMode.includes('continuous')) {
+      advanced.push({ exposureMode: 'continuous' });
+    }
+    if (
+      Array.isArray(caps.whiteBalanceMode) &&
+      caps.whiteBalanceMode.includes('continuous')
+    ) {
+      advanced.push({ whiteBalanceMode: 'continuous' });
+    }
+    if (!advanced.length) return;
+    try {
+      track.applyConstraints({ advanced }).catch(() => {});
+    } catch {
+      /* no-op where unsupported */
     }
   }
 

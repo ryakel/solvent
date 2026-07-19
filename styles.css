@@ -189,9 +189,12 @@ h1 {
 .reticle {
   position: absolute;
   inset: 20%;
-  border: 2px solid rgba(244, 246, 248, 0.9);
+  border: 2px solid rgba(244, 246, 248, 0.95);
   border-radius: 10px;
-  box-shadow: 0 0 0 100vmax rgba(5, 7, 10, 0.45);
+  /* A light scrim only — just enough to lift the reticle off the feed. The
+     camera image must read at its true brightness (and brighten as the user
+     adds light), so this stays subtle; the crisp border does the framing. */
+  box-shadow: 0 0 0 100vmax rgba(5, 7, 10, 0.16), 0 0 0 1px rgba(5, 7, 10, 0.5);
   pointer-events: none;
   display: grid;
   grid-template-columns: repeat(var(--gn, 2), 1fr);
@@ -708,9 +711,32 @@ h1 {
 
 /* ---------- responsive ---------- */
 @media (max-width: 760px) {
-  .capture-grid, .solve-grid { grid-template-columns: 1fr; }
+  .solve-grid { grid-template-columns: 1fr; }
   .wordmark { height: 30px; }
   .net { max-width: 100%; }
+
+  /* Mobile scan layout: the two things a one-handed scanner needs — the camera
+     showing the whole cube, and the Capture button — must both sit on screen at
+     once. So the camera is height-capped to a comfortable square, the Capture /
+     Skip actions are pulled up directly beneath it, and the guide card, face
+     chips and secondary controls flow BELOW. `display: contents` flattens the
+     right-hand column so its children can be reordered inline with the camera. */
+  .capture-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .capture-side { display: contents; }
+  .camera-wrap {
+    order: -2;
+    width: min(100%, 46vh);
+    aspect-ratio: 1 / 1;
+    height: auto;
+    margin-inline: auto;
+  }
+  .capture-actions--primary { order: -1; margin-inline: auto; width: min(100%, 46vh); }
+  /* Tighten the header block so more of the viewport is the live preview. */
+  .screen__head { margin-bottom: 14px; }
 }
 @media (max-width: 380px) {
   body { font-size: 15px; }

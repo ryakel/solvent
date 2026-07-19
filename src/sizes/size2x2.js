@@ -57,49 +57,104 @@ const FACE_LABELS = {
   B: 'Back',
 };
 
-function hexToRgb(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-const REF_RGB = Object.fromEntries(COLORS.map((c) => [c, hexToRgb(COLOR_HEX[c])]));
+// ---- camera color classification (HSV / hue-based) -------------------------
+//
+// Absolute RGB proximity to fixed reference colors is fragile: a warm or cool
+// white balance shifts every channel, and the scheme's warm colors (white /
+// yellow / orange / red) sit close in RGB, so a naive nearest-RGB read flips
+// between them under ordinary phone lighting. Hue is far more stable — it barely
+// moves when the whole frame warms or cools — so we classify in HSV instead:
+//
+//   • White is the only ACHROMATIC scheme color, so it is detected by LOW
+//     saturation + adequate VALUE (brightness), never by RGB proximity. A dim,
+//     low-saturation grey is still "nearest White" but reports low confidence.
+//   • The five chromatic colors (Yellow, Orange, Red, Green, Blue) are matched
+//     to the nearest HUE band. Red / Orange / Yellow are close in hue and Red
+//     wraps around 0°/360°, so distances are measured on the hue circle.
+//
+// Hue reference angles (degrees) derived from the scheme hexes in COLOR_HEX:
+//   Red ≈ 358°, Orange ≈ 24°, Yellow ≈ 47°, Green ≈ 152°, Blue ≈ 216°.
+const HUE_REF = { R: 358, O: 24, Y: 47, G: 152, B: 216 };
 
-// Squared, green-weighted distance from a sample to a scheme color. Weighting the
-// green channel a little more separates the warm colors (white/yellow/orange/red)
-// that trip up naive RGB distance.
-function colorDist2([r, g, b], [rr, gg, bb]) {
-  return (r - rr) ** 2 + 1.3 * (g - gg) ** 2 + (b - bb) ** 2;
+// Saturation below this reads as achromatic → White. The scheme's chromatic
+// colors stay well above this even when dim or lightly tinted; a warm/cool
+// white stays below it.
+const S_WHITE = 0.2;
+// White must be at least this bright to be a confident white (vs a mid grey).
+const V_WHITE_FLOOR = 0.45;
+const V_WHITE_SPAN = 0.4; // value at which white confidence saturates ≈ 0.85
+
+function rgbToHsv([r, g, b]) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  const s = max === 0 ? 0 : d / max;
+  return { h, s, v: max };
 }
 
-// Classify a sample AND report how sure we are. `confidence` is the normalized
-// margin between the nearest and second-nearest scheme color:
-//     (d2 - d1) / (d2 + d1)   on root distances, so it is a comparable 0..1
-// signal regardless of a color's absolute separation. ~1 means the sample sits
-// squarely on one color; ~0 means it is a coin-flip between two — a likely
-// misread the UI can surface for a second look. Purely a hint: correction is
-// always available and nothing downstream trusts it.
+// Shortest distance between two hues on the 0–360 circle.
+function hueDist(a, b) {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+function clamp01(x) {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+// Classify a sample AND report how sure we are. `confidence` is a normalized
+// 0..1 margin, kept comparable across colors so the existing recheck flags work
+// unchanged:
+//   • chromatic: the hue-circle margin between the nearest and second-nearest
+//     band, (d2 - d1) / (d1 + d2) — ~1 sits squarely on one hue, ~0 is a
+//     coin-flip between two adjacent hues (the warm colors, typically);
+//   • White: how clearly achromatic (saturation below S_WHITE) AND bright the
+//     sample is — a dim grey lands near White but reports low confidence.
+// Purely a hint: correction is always available and nothing downstream trusts it.
 export function classifyColorDetailed(rgb) {
-  let best = 'W';
-  let bestD = Infinity;
-  let secondD = Infinity;
-  for (const c of COLORS) {
-    const d = colorDist2(rgb, REF_RGB[c]);
-    if (d < bestD) {
-      secondD = bestD;
-      bestD = d;
+  const { h, s, v } = rgbToHsv(rgb);
+
+  if (s < S_WHITE) {
+    // Achromatic → White. Confident when saturation is well under the boundary
+    // and the sample is bright; a mid-value grey stays low-confidence.
+    const satMargin = clamp01((S_WHITE - s) / S_WHITE);
+    const valMargin = clamp01((v - V_WHITE_FLOOR) / V_WHITE_SPAN);
+    return { color: 'W', confidence: satMargin * valMargin };
+  }
+
+  // Chromatic → nearest hue band, measured on the hue circle.
+  let best = 'R';
+  let d1 = Infinity;
+  let d2 = Infinity;
+  for (const c of Object.keys(HUE_REF)) {
+    const d = hueDist(h, HUE_REF[c]);
+    if (d < d1) {
+      d2 = d1;
+      d1 = d;
       best = c;
-    } else if (d < secondD) {
-      secondD = d;
+    } else if (d < d2) {
+      d2 = d;
     }
   }
-  const d1 = Math.sqrt(bestD);
-  const d2 = Math.sqrt(secondD);
-  const confidence = d1 + d2 === 0 ? 1 : (d2 - d1) / (d2 + d1);
+  const confidence = d1 + d2 === 0 ? 1 : (d2 - d1) / (d1 + d2);
   return { color: best, confidence };
 }
 
-// Below this normalized margin a scan sample is "low confidence" — the two
-// closest scheme colors are near enough that the read could go either way, so
-// the UI flags it for a recheck. Tunable; a hint, never a hard gate.
+// Below this normalized margin a scan sample is "low confidence" — either two
+// hue bands are near enough that the read could go either way, or a would-be
+// White is a dim/borderline grey — so the UI flags it for a recheck. Tunable;
+// a hint, never a hard gate.
 export const CONFIDENCE_THRESHOLD = 0.2;
 
 // Classify an [r,g,b] sample to the nearest scheme color. Correction is always
