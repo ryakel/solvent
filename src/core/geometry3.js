@@ -84,6 +84,117 @@ export function applyGeomSequence3(geom, moves) {
   return g;
 }
 
+// Rotate the WHOLE cube (every cubie, not just one layer) by `quarters` * 90° about
+// a coordinate axis. This is a re-orientation of the cube in space, not a move — it
+// permutes which physical face each cubie shows on. Used to reason about the 24
+// ways a solved cube can be held.
+export function rotateWholeGeom3(geom, axis, quarters) {
+  return geom.map((cubie) => ({
+    pos: rotateVec(cubie.pos, axis, quarters),
+    stickers: cubie.stickers.map((s) => ({
+      normal: rotateVec(s.normal, axis, quarters),
+      color: s.color,
+    })),
+  }));
+}
+
+// The center color shown on each physical face of a geometry (its middle cubie).
+function centerSchemeOf(geom) {
+  const scheme = {};
+  for (const f of FACE_ORDER) {
+    const { axis, sign } = FACES[f];
+    const cubie = geom.find(
+      (c) => c.pos[axis] === sign && c.pos.filter((v) => v === 0).length === 2
+    );
+    scheme[f] = cubie.stickers[0].color;
+  }
+  return scheme;
+}
+
+// All center-color schemes reachable from `seed` by whole-cube rotations (BFS
+// composing x/y/z quarter turns). Rotations preserve chirality, so this returns
+// the 24 orientations of whatever handedness `seed` has.
+function orientationsFrom(seed) {
+  const schemes = [];
+  const seen = new Set();
+  const keyOf = (s) => FACE_ORDER.map((f) => s[f]).join('');
+  const queue = [seed];
+  const first = centerSchemeOf(queue[0]);
+  seen.add(keyOf(first));
+  schemes.push(first);
+  for (let i = 0; i < queue.length; i++) {
+    for (let axis = 0; axis < 3; axis++) {
+      const g = rotateWholeGeom3(queue[i], axis, 1);
+      const scheme = centerSchemeOf(g);
+      const k = keyOf(scheme);
+      if (!seen.has(k)) {
+        seen.add(k);
+        schemes.push(scheme);
+        queue.push(g);
+      }
+    }
+  }
+  return schemes; // exactly 24
+}
+
+// The 24 valid cube orientations, as center-color schemes { U, R, F, D, L, B }.
+// Generated from the oracle by enumerating every whole-cube rotation, so each is a
+// proper ROTATION of the canonical scheme — correct opposite pairs AND correct
+// chirality, never a mirror. Any real standard-scheme scanned cube's 6 centers
+// must match exactly one of these.
+export function cubeOrientations3() {
+  return orientationsFrom(solvedGeom3());
+}
+
+// Reflect a geometry through the x=0 plane: negate the x-component of every
+// position and every sticker normal. This flips the cube's CHIRALITY (a
+// right-handed / standard color scheme becomes left-handed / mirror) while keeping
+// it a mechanically-identical, valid cube. One reflection lets the single standard
+// solver handle mirror-scheme cubes too — reflect in, solve, reflect the moves out.
+export function reflectGeom3(geom) {
+  const nx = ([x, y, z]) => [-x, y, z];
+  return geom.map((cubie) => ({
+    pos: nx(cubie.pos),
+    stickers: cubie.stickers.map((s) => ({ normal: nx(s.normal), color: s.color })),
+  }));
+}
+
+// The 24 MIRROR cube orientations: center schemes of a reflected solved cube under
+// every whole-cube rotation. A scanned cube whose 6 centers match one of these
+// (and none of the 24 proper orientations) is a left-handed / mirror color scheme —
+// a real, solvable cube of opposite chirality (or a scan that mirror-flipped).
+export function cubeMirrorOrientations3() {
+  return orientationsFrom(reflectGeom3(solvedGeom3()));
+}
+
+// reflectMoveName[m] = the move whose effect on a reflected cube mirrors m's effect
+// on the original: reflectGeom3(applyGeomMove3(g, m)) equals
+// applyGeomMove3(reflectGeom3(g), reflectMoveName[m]) for every geometry g. Derived
+// purely from the oracle (no hand-picked turn convention), so a mirror cube's
+// solution — found in the reflected/standard frame — maps back to real physical
+// face turns by relabelling each move through this table.
+export const reflectMoveName = (() => {
+  const solved = solvedGeom3();
+  const reflSolved = reflectGeom3(solved);
+  const names = [];
+  for (const face of FACE_ORDER) {
+    names.push({ name: face, face, times: 1 });
+    names.push({ name: face + "'", face, times: -1 });
+    names.push({ name: face + '2', face, times: 2 });
+  }
+  const map = {};
+  for (const src of names) {
+    const target = reflectGeom3(applyGeomMove3(solved, src.face, src.times));
+    const hit = names.find((cand) =>
+      geomEquals3(applyGeomMove3(reflSolved, cand.face, cand.times), target)
+    );
+    if (!hit) throw new Error('no mirror image for move ' + src.name);
+    map[src.name] = hit.name;
+  }
+  return map;
+})();
+
+
 // Structural equality of two geometries; order-independent. Reuses the 2x2
 // oracle's comparator, which already keys on position + per-normal color and so
 // works for cubies with any number of stickers.

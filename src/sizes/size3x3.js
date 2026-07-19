@@ -12,10 +12,12 @@
 
 import { FACE_ORDER, COLORS } from '../core/geometry.js';
 import { SOLVED, applyMove, geomFromState3 } from '../core/cube3.js';
+import { applyGeomMove3, reflectMoveName } from '../core/geometry3.js';
 import {
   faceColorsFromState,
-  stateFromFaces,
+  analyzeFaces,
   validateFaces,
+  geomFromRawFaces,
   SOLVED_FACES,
   N,
 } from '../core/facelet3.js';
@@ -51,24 +53,74 @@ function emptyFaces() {
   return f;
 }
 
+// Recolor a geometry's stickers through a color map (canonical -> scanned), leaving
+// positions untouched. The moves are physical (they name face positions as held),
+// so only the colors are mapped back into the user's frame for rendering.
+function recolor(geom, map) {
+  return geom.map((cubie) => ({
+    pos: cubie.pos,
+    stickers: cubie.stickers.map((s) => ({ normal: s.normal, color: map[s.color] })),
+  }));
+}
+
+// Parse a move name ("U", "R'", "F2") into an oracle (face, times) pair.
+function parseMove(name) {
+  const face = name[0];
+  const times = name.length === 1 ? 1 : name[1] === "'" ? -1 : 2;
+  return { face, times };
+}
+
 // Solve from a validated faces object. Returns everything the UI needs:
 //   moves: [{ name, hint }]
 //   frames: geometry after each step, starting from the scanned scramble
-//   normalizedGeom: the scramble as rendered (no normalization: centers fix the
-//                   frame, so this is just the scramble geometry)
+//   normalizedGeom: the scramble as rendered
+//   mirror, warning: set when the scan was a mirror-scheme cube
+//
+// The cube is solved internally in the canonical frame (centers relabelled to the
+// standard scheme), but the returned frames are recoloured back into the USER's
+// scanned colors so the on-screen 3D cube matches the physical cube in hand. Centers
+// define the frame, so there is no whole-cube normalization.
 function solve(faces) {
-  const raw = stateFromFaces(faces);
+  const a = analyzeFaces(faces);
+  if (!a.ok) throw new Error('invalid cube: ' + a.errors.join(' '));
+  const raw = a.state;
   const { moves } = solveState(raw);
-  const frames = [geomFromState3(raw)];
+
+  // Mirror-scheme cube: the solver ran on the reflected (standard) cube, so each
+  // move must be reflected back to a real physical face turn (R<->L, direction
+  // inverted). We render by simulating those physical turns on the user's ACTUAL
+  // scanned geometry, so the on-screen cube and colors match the cube in hand and
+  // end solved.
+  if (a.mirror) {
+    const physMoves = moves.map((m) => reflectMoveName[m]);
+    let g = geomFromRawFaces(a.rawFaces);
+    const frames = [g];
+    for (const name of physMoves) {
+      const { face, times } = parseMove(name);
+      g = applyGeomMove3(g, face, times);
+      frames.push(g);
+    }
+    return {
+      moves: physMoves.map((name) => ({ name, hint: moveHint(name) })),
+      frames,
+      normalizedGeom: frames[0],
+      mirror: true,
+      warning: a.warning,
+    };
+  }
+
+  const frames = [recolor(geomFromState3(raw), a.inverse)];
   let s = raw;
   for (const m of moves) {
     s = applyMove(s, m);
-    frames.push(geomFromState3(s));
+    frames.push(recolor(geomFromState3(s), a.inverse));
   }
   return {
     moves: moves.map((name) => ({ name, hint: moveHint(name) })),
     frames,
     normalizedGeom: frames[0],
+    mirror: false,
+    warning: null,
   };
 }
 

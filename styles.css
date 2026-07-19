@@ -634,6 +634,18 @@ h1 {
 .validation__errs h2 { font-size: 14px; margin: 0 0 8px; color: var(--c-red); }
 .validation__errs ul { margin: 0; padding-left: 18px; }
 .validation__errs li { font-size: 13.5px; color: var(--ink-dim); margin-bottom: 4px; }
+/* Heads-up (not an error): shown when a valid cube reads as a mirror-image
+   color scheme, so a mis-entered standard cube can be caught before solving. */
+.validation__note {
+  margin-top: 10px;
+  border: 1px solid rgba(245,197,24,0.45);
+  border-left: 3px solid var(--c-yellow);
+  background: rgba(245,197,24,0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  color: var(--ink-dim);
+}
 
 .review-actions, .stepper { display: flex; gap: 10px; flex-wrap: wrap; }
 .review-actions { margin-top: 8px; }

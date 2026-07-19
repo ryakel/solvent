@@ -537,11 +537,14 @@ export function initApp() {
       solveBtn.disabled = true;
       return false;
     }
-    const { ok, errors } = mod.current.validate(faces);
+    const { ok, errors, mirror, warning } = mod.current.validate(faces);
     box.innerHTML = '';
     if (ok) {
       const div = el('div', 'validation__ok', 'This is a real, solvable cube. Ready to solve.');
       box.appendChild(div);
+      if (mirror && warning) {
+        box.appendChild(el('div', 'validation__note', warning));
+      }
       solveBtn.disabled = false;
     } else {
       const div = el('div', 'validation__errs');
@@ -980,9 +983,23 @@ export function initApp() {
     if (solution.moves.length === 0) {
       lede.textContent = 'This cube is already solved. Nothing to do.';
     } else {
-      lede.textContent = `Optimal solution in ${solution.moves.length} move${
+      lede.textContent = `Solution in ${solution.moves.length} move${
         solution.moves.length > 1 ? 's' : ''
       }. Step through with Next, or drag the cube to look around.`;
+    }
+    // Carry the mirror-scheme heads-up onto the solution screen too, so the note
+    // stays visible while the user follows the moves.
+    let mnote = $('#solution-mirror-note');
+    if (solution.mirror && solution.warning) {
+      if (!mnote) {
+        mnote = el('div', 'validation__note');
+        mnote.id = 'solution-mirror-note';
+        lede.parentNode.insertBefore(mnote, lede.nextSibling);
+      }
+      mnote.textContent = solution.warning;
+      mnote.hidden = false;
+    } else if (mnote) {
+      mnote.hidden = true;
     }
     updateStepButtons();
   }
