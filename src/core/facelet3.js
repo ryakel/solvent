@@ -183,6 +183,50 @@ const REAL_EDGE_SETS = new Set();
 })();
 const OPPOSITE = { W: 'Y', Y: 'W', G: 'B', B: 'G', R: 'O', O: 'R' };
 const COLOR_NAMES = { W: 'White', Y: 'Yellow', G: 'Green', B: 'Blue', R: 'Red', O: 'Orange' };
+const FACE_NAMES = { U: 'Up', D: 'Down', F: 'Front', B: 'Back', L: 'Left', R: 'Right' };
+
+// A specific, actionable reason the 6 centers don't form a real cube — a repeated
+// center colour, or two opposite faces that aren't an opposite pair — instead of a
+// vague "not a real cube". Centres are fixed on a 3x3, so this is the single most
+// common hand-entry slip (two faces given the same center) and it should name the
+// exact faces to fix.
+function diagnoseCenters(faces) {
+  const centers = {};
+  for (const f of FACE_ORDER) centers[f] = faces[f][CENTER_IDX];
+
+  // Repeated center colour: name every face that shares it.
+  const byColor = {};
+  for (const f of FACE_ORDER) (byColor[centers[f]] ||= []).push(f);
+  for (const color of COLORS) {
+    const fs = byColor[color];
+    if (fs && fs.length > 1) {
+      const names = fs.map((f) => `${FACE_NAMES[f]}`);
+      const list =
+        names.length === 2
+          ? `${names[0]} and ${names[1]}`
+          : `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+      return (
+        `The ${list} centers are ${fs.length > 2 ? 'all' : 'both'} ${COLOR_NAMES[color]}, ` +
+        `but every face has a different center color. ` +
+        `Re-check ${fs.length > 2 ? 'those centers' : 'one of them'}.`
+      );
+    }
+  }
+
+  // Six distinct centers but an impossible pairing: opposite faces must be an
+  // opposite colour pair (White–Yellow, Green–Blue, Red–Orange).
+  for (const [a, b] of [['U', 'D'], ['F', 'B'], ['L', 'R']]) {
+    if (OPPOSITE[centers[a]] !== centers[b]) {
+      return (
+        `The ${FACE_NAMES[a]} and ${FACE_NAMES[b]} centers are ${COLOR_NAMES[centers[a]]} ` +
+        `and ${COLOR_NAMES[centers[b]]}, but opposite faces must be an opposite pair ` +
+        `(White–Yellow, Green–Blue, Red–Orange). Re-check a center.`
+      );
+    }
+  }
+
+  return "The center colours aren't a single real cube — check for a misread center.";
+}
 
 function permParity(p) {
   const seen = new Array(p.length).fill(false);
@@ -294,12 +338,7 @@ export function analyzeFaces(faces) {
     return res;
   }
 
-  return {
-    ok: false,
-    errors: [
-      "The center colors aren't a single real cube — check for a misread center.",
-    ],
-  };
+  return { ok: false, errors: [diagnoseCenters(faces)] };
 }
 
 // Validate + solve-state for a faces object whose centers already matched a proper

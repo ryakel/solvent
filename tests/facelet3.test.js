@@ -199,12 +199,32 @@ test('validateFaces accepts a cube held in ANY of the 24 orientations', () => {
   }
 });
 
-test('validateFaces rejects a duplicate center with a specific message', () => {
+test('validateFaces names the exact faces when two centers share a color', () => {
   const faces = clone(SOLVED_FACES);
   faces.U[4] = 'Y'; // U center now Yellow, same as D center -> not a real orientation
   const { ok, errors } = validateFaces(faces);
   assert.ok(!ok);
-  assert.ok(errors.some((e) => /center/i.test(e)), errors.join(' '));
+  const msg = errors.join(' ');
+  // The message must name BOTH conflicting faces and the shared color, not just
+  // say "a misread center" (which forces the user to hunt for it).
+  assert.match(msg, /Up/);
+  assert.match(msg, /Down/);
+  assert.match(msg, /Yellow/);
+});
+
+test('validateFaces flags an impossible opposite pairing of distinct centers', () => {
+  const faces = clone(SOLVED_FACES);
+  // Make all six centers distinct but pair White opposite Green (U/D), which no
+  // real cube can have (opposites are W-Y, G-B, R-O).
+  faces.U[4] = 'W';
+  faces.D[4] = 'G';
+  faces.F[4] = 'Y';
+  faces.B[4] = 'R';
+  faces.R[4] = 'O';
+  faces.L[4] = 'B';
+  const { ok, errors } = validateFaces(faces);
+  assert.ok(!ok);
+  assert.match(errors.join(' '), /opposite/i);
 });
 
 test('validateFaces rejects centers and pieces of disagreeing handedness', () => {
