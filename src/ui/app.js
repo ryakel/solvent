@@ -394,7 +394,10 @@ export function initApp() {
     const step = seq[captureIndex];
     const f = step.face;
     // Re-derive the label/text from the turn so the wording flips with mirror.
-    const { label, text } = mod.current.describeScanStep(step.turn, step.face, { mirror });
+    const { label, text } = mod.current.describeScanStep(step.turn, step.face, {
+      mirror,
+      centers: mod.current.hasCenters,
+    });
     $('#capture-step').textContent = `STEP ${captureIndex + 1}/${seq.length}`;
     $('#capture-turn').textContent = label;
     $('#capture-face-name').textContent = mod.current.faceLabels[f];

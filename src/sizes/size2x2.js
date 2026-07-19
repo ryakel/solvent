@@ -210,14 +210,24 @@ const FACE_WORDS = { U: 'top', D: 'bottom', F: 'front', B: 'back', R: 'right', L
 // Turn a spec into a short technical label + plain-language instruction.
 // `mirror` swaps left/right so the wording and the on-screen arrow match a
 // mirrored (selfie) camera preview, where the world reads reversed.
-export function describeScanStep(turn, face, { mirror = false } = {}) {
+export function describeScanStep(turn, face, { mirror = false, centers = true } = {}) {
   const word = FACE_WORDS[face];
   if (!turn) {
-    const up = COLOR_NAMES[FACE_COLOR.U];
-    const front = COLOR_NAMES[FACE_COLOR.F];
+    // A scrambled cube has no solid "white face", so we can't say "white on top".
+    // A 3x3's CENTER squares never move, so they anchor the start even scrambled;
+    // a 2x2 has no centers, so any starting orientation works — the app figures
+    // out the rest.
+    if (centers) {
+      const up = COLOR_NAMES[FACE_COLOR.U];
+      const front = COLOR_NAMES[FACE_COLOR.F];
+      return {
+        label: 'START',
+        text: `Put the ${up}-center face on top and the ${front}-center face toward the camera. Go by the center squares — they never move, even scrambled. Keep that grip and follow each turn.`,
+      };
+    }
     return {
       label: 'START',
-      text: `Hold the cube with ${up} on top and ${front} toward the camera.`,
+      text: `Hold the cube in any comfortable orientation and keep that exact grip — just follow each turn. Solvent works out the orientation from the cube itself.`,
     };
   }
   const amount = Math.abs(turn.deg);
@@ -353,6 +363,7 @@ export const size2x2 = {
   name: '2×2',
   gridN: N, // stickers per face edge for scanning + correction
   cubiesPerEdge: 2, // for the 3D renderer
+  hasCenters: false, // a 2x2 has no fixed centers to anchor the scan start
   faceOrder: FACE_ORDER,
   colors: COLORS,
   colorHex: COLOR_HEX,

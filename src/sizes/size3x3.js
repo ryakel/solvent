@@ -147,6 +147,7 @@ export const size3x3 = {
   name: '3×3',
   gridN: N, // 3 stickers per face edge for scanning + correction
   cubiesPerEdge: 3, // for the 3D renderer
+  hasCenters: true, // fixed centers anchor the scan start, even on a scrambled cube
   faceOrder: FACE_ORDER,
   colors: COLORS,
   colorHex: COLOR_HEX,
