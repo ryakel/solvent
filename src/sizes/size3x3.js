@@ -31,8 +31,9 @@ import {
   moveHint,
   moveToTurn,
   describeScanStep,
-  SCAN_SEQUENCE,
+  SCAN_STEPS,
 } from './size2x2.js';
+import { buildScanSequence } from './scanpath.js';
 
 const FACE_LABELS = {
   U: 'Up',
@@ -46,6 +47,14 @@ const FACE_LABELS = {
 // Which scheme color each face is when solved (its center) — for scan guidance.
 export const FACE_COLOR = {};
 for (const f of FACE_ORDER) FACE_COLOR[f] = SOLVED_FACES[f][0];
+
+// Same whole-cube turns as the 2x2 (F→R→B→L→U→D), but the camera -> facelet mapping
+// is derived for the 3x3 grid (see scanpath.js).
+const SCAN_SEQUENCE = buildScanSequence(SCAN_STEPS, {
+  faceOrder: FACE_ORDER,
+  gridN: N,
+  geomFromFaces: geomFromRawFaces,
+}).map((s) => ({ ...s, ...describeScanStep(s.turn, s.face) }));
 
 function emptyFaces() {
   const f = {};

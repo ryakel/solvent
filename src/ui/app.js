@@ -5,6 +5,7 @@ import { SIZE_MODULES, getSizeModule, defaultSizeModule } from '../sizes/index.j
 import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
+import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
 import { stateFromGeom, isSolved } from '../core/cube2.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -427,8 +428,12 @@ export function initApp() {
       grid.innerHTML = '';
       for (let i = 0; i < n * n; i++) grid.appendChild(el('i'));
     }
+    // Stored faces are in facelet order; lay this one out the way the camera sees
+    // it at its scan step so it matches the cube in front of the lens.
+    const step = scanSeq().find((s) => s.face === f);
+    const seen = faceToCamera(step && step.cameraToFacelet, faces[f]);
     [...grid.children].forEach((cell, i) => {
-      cell.style.background = mod.current.colorHex[faces[f][i]] || 'transparent';
+      cell.style.background = mod.current.colorHex[seen[i]] || 'transparent';
     });
   }
 
@@ -704,17 +709,21 @@ export function initApp() {
     const samples = scanner.sample();
     if (!samples) return false;
     const order = scanFaces();
-    const f = order[captureIndex];
+    const step = scanSeq()[captureIndex];
+    const f = step.face;
+    // The camera reads cells in its own frame; re-seat them onto the facelet grid
+    // (U and D arrive rotated — see sizes/scanpath.js).
+    const seat = (cells) => cameraToFace(step.cameraToFacelet, cells);
     // Classify with a confidence margin when the module supports it, so genuinely
     // ambiguous reads get flagged for a recheck at Verify. Falls back cleanly to
     // the plain classifier (and no flags) for a module that doesn't opt in.
     const thr = mod.current.confidenceThreshold ?? 0;
     if (typeof mod.current.classifyColorDetailed === 'function') {
       const detailed = samples.map((rgb) => mod.current.classifyColorDetailed(rgb));
-      faces[f] = detailed.map((d) => d.color);
-      lowConf[f] = detailed.map((d) => d.confidence < thr);
+      faces[f] = seat(detailed.map((d) => d.color));
+      lowConf[f] = seat(detailed.map((d) => d.confidence < thr));
     } else {
-      faces[f] = samples.map((rgb) => mod.current.classifyColor(rgb));
+      faces[f] = seat(samples.map((rgb) => mod.current.classifyColor(rgb)));
       lowConf[f] = faces[f].map(() => false);
     }
     dismissMirrorNudge();

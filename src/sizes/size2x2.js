@@ -10,7 +10,6 @@ import {
   COLORS,
   FACES as GEOM_FACES,
   quartersForMove,
-  rotateVec,
 } from '../core/geometry.js';
 import {
   SOLVED,
@@ -34,6 +33,7 @@ import {
   alignGeom,
   findMove,
 } from '../core/mirror2.js';
+import { buildScanSequence } from './scanpath.js';
 
 // Palette (mirrors DESIGN.md). Used for the 3D stickers, the correction grid,
 // and camera color classification.
@@ -257,7 +257,7 @@ export function describeScanStep(turn, face, { mirror = false, centers = true } 
 
 // F → R → B → L  (three 90° left yaws around the sides),
 // then U (tilt forward 90°), then D (keep tipping — a 180° flip).
-const SCAN_STEPS = [
+export const SCAN_STEPS = [
   { face: 'F', turn: null },
   { face: 'R', turn: YAW_LEFT_90 },
   { face: 'B', turn: YAW_LEFT_90 },
@@ -266,35 +266,16 @@ const SCAN_STEPS = [
   { face: 'D', turn: TILT_FWD_180 },
 ];
 
-export const SCAN_SEQUENCE = SCAN_STEPS.map((s) => ({
-  ...s,
-  ...describeScanStep(s.turn, s.face),
-}));
-
-// Self-check with exact integer math (geometry.js is the oracle): accumulating
-// the declared turns must present each step's face to the camera (+z). Throws at
-// module load if the sequence and the turns ever drift apart.
-(function verifyScanSequence() {
-  const AXIS_INDEX = { x: 0, y: 1, z: 2 };
-  const world = {};
-  for (const [f, spec] of Object.entries(GEOM_FACES)) {
-    const v = [0, 0, 0];
-    v[spec.axis] = spec.sign;
-    world[f] = v;
-  }
-  for (const step of SCAN_STEPS) {
-    if (step.turn) {
-      const quarters = Math.round(step.turn.deg / 90);
-      for (const f of Object.keys(world)) {
-        world[f] = rotateVec(world[f], AXIS_INDEX[step.turn.axis], quarters);
-      }
-    }
-    const w = world[step.face];
-    if (!(w[0] === 0 && w[1] === 0 && w[2] === 1)) {
-      throw new Error(`scan sequence broken: step ${step.face} does not face the camera`);
-    }
-  }
-})();
+// Each step also carries `cameraToFacelet`, derived from the geometry oracle (see
+// scanpath.js): where each camera cell lands on the facelet grid. The side faces
+// read straight across, but U and D are reached by tilting from a side face and
+// arrive rotated in the camera's view, so the capture must re-seat them. Building
+// the mapping throws at module load if a step ever stops presenting its face.
+export const SCAN_SEQUENCE = buildScanSequence(SCAN_STEPS, {
+  faceOrder: FACE_ORDER,
+  gridN: N,
+  geomFromFaces,
+}).map((s) => ({ ...s, ...describeScanStep(s.turn, s.face) }));
 
 function emptyFaces() {
   const f = {};
