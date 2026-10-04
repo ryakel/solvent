@@ -300,8 +300,14 @@ function installFakeCamera() {
     },
     // How many camera tracks are open right now — must never exceed one.
     liveTracks: () => streams.flatMap((st) => st.getTracks()).filter((t) => t.readyState === 'live').length,
+    // Refuse permission (as after tapping "Block") until set back to false. A test
+    // can start in that state by setting window.__fakeCamDenied before install.
+    deny: !!window.__fakeCamDenied,
+    // The camera dies under the page (backgrounded phone, another app).
+    stopAll: () => streams.flatMap((st) => st.getTracks()).forEach((t) => t.stop()),
   };
   navigator.mediaDevices.getUserMedia = async () => {
+    if (window.__fakeCam.deny) throw new DOMException('Permission denied', 'NotAllowedError');
     const st = canvas.captureStream(30);
     streams.push(st);
     return st;
@@ -955,6 +961,63 @@ test('the solution cube shows the move being waited on — layer and direction',
     assert.deepEqual(await shown(), expect(moves[moves.length - 1]), 'Prev brings the last move back');
 
     assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+// ---- camera problems ---------------------------------------------------------------
+
+test('a blocked camera says so and comes back with Retry once allowed', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext({ reducedMotion: 'reduce' });
+    await context.addInitScript(() => (window.__fakeCamDenied = true));
+    await context.addInitScript(installFakeCamera);
+    const page = await context.newPage();
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.__solvent && window.__solvent.snapshot().cameraProblem === 'denied');
+    assert.match(await page.textContent('#camera-msg'), /blocked/);
+    assert.ok(await page.$eval('#btn-capture', (b) => b.disabled), 'no capturing without a camera');
+
+    // The user allows it in site settings and taps Retry.
+    await page.evaluate(() => (window.__fakeCam.deny = false));
+    await page.click('#btn-camera-retry');
+    await page.waitForFunction(() => window.__fakeCam.liveTracks() === 1 && !document.querySelector('#btn-capture').disabled);
+    assert.equal(await page.evaluate(() => window.__solvent.snapshot().cameraProblem), null);
+    assert.equal(await page.$eval('#camera-msg', (n) => getComputedStyle(n).display), 'none');
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('a camera that drops mid-scan is noticed, and Retry brings it back', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(scrambleState(cube2, ['R', 'U'])));
+    await presentFace(page, size2x2, photos[0].cells);
+    await page.click('#btn-capture');
+
+    await page.evaluate(() => window.__fakeCam.stopAll());
+    await page.waitForFunction(() => window.__solvent.snapshot().cameraProblem === 'stopped', null, { timeout: 3000 });
+    assert.match(await page.textContent('#camera-msg'), /camera stopped/);
+
+    await page.click('#btn-camera-retry');
+    await page.waitForFunction(() => window.__fakeCam.liveTracks() === 1 && !document.querySelector('#btn-capture').disabled);
+    // The scan carries on where it was.
+    assert.equal(await page.evaluate(() => window.__solvent.snapshot().captureIndex), 1);
+    await presentFace(page, size2x2, photos[1].cells);
+    await page.click('#btn-capture');
+    assert.equal(await page.evaluate(() => window.__solvent.snapshot().captureIndex), 2);
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
     await context.close();
   } finally {
     await browser.close();

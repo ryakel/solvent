@@ -425,6 +425,8 @@ h1 {
   font-size: 14px;
   background: rgba(5, 7, 10, 0.85);
 }
+.camera-msg__box { max-width: 34ch; display: grid; gap: 12px; justify-items: center; }
+.camera-msg__box p { margin: 0; line-height: 1.5; }
 
 .capture-side { display: flex; flex-direction: column; gap: 16px; }
 /* The turn-guide card: an animated demonstration of the exact whole-cube turn

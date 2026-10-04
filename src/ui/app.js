@@ -354,6 +354,12 @@ export function initApp() {
     if (diff >= Math.max(1, Math.ceil(view.length / 4))) viewChanged = true;
   }
   function liveTick() {
+    // A camera that was live and no longer is (backgrounded phone, another app):
+    // say so instead of sampling a frozen frame.
+    if (scanner && !scanner.isActive() && screens.capture.classList.contains('is-active') && !cameraStarting) {
+      cameraLost();
+      return;
+    }
     if (!liveActive()) return;
     let samples;
     try {
@@ -387,6 +393,8 @@ export function initApp() {
   }
   function startLive() {
     if (liveTimer || !liveActive()) return;
+    // (The tick also watches for the camera dropping, so it runs whenever a live
+    // camera is on the Scan screen.)
     $('#camera-wrap').classList.add('is-live');
     liveTimer = setInterval(liveTick, LIVE_SAMPLE_MS);
     liveTick();
@@ -878,18 +886,61 @@ export function initApp() {
     });
   }
 
+  // What to do about each way the camera can fail (scanner.failureReason()), plus
+  // 'stopped' for a camera that was live and then ended.
+  const CAMERA_PROBLEMS = {
+    insecure:
+      'The camera only works on a secure (https://) page. Open Solvent at its https:// address — or enter colors by hand; the solver works the same.',
+    denied:
+      'Camera access is blocked for this site. Allow it in your browser’s site settings (the camera or lock icon by the address bar; on iPhone: Settings › Safari › Camera), then Retry — or enter colors by hand.',
+    notfound: 'No camera was found on this device. Enter colors by hand — the solver works the same.',
+    busy: 'The camera is busy — another app or tab is using it. Close that, then Retry.',
+    stopped: 'The camera stopped — the phone may have paused it, or another app took it. Retry to bring it back.',
+    other: 'The camera couldn’t start. Retry — or enter colors by hand; the solver works the same.',
+  };
+  let cameraProblem = null;
+  function showCameraProblem(reason) {
+    cameraProblem = reason;
+    const msg = $('#camera-msg');
+    msg.innerHTML = '';
+    const box = el('div', 'camera-msg__box');
+    box.appendChild(el('p', null, CAMERA_PROBLEMS[reason] || CAMERA_PROBLEMS.other));
+    if (reason !== 'insecure') {
+      const retry = el('button', 'btn', 'Retry');
+      retry.type = 'button';
+      retry.id = 'btn-camera-retry';
+      retry.addEventListener('click', () => {
+        hideCameraProblem();
+        ensureCamera();
+      });
+      box.appendChild(retry);
+    }
+    msg.appendChild(box);
+    msg.dataset.reason = reason;
+    msg.hidden = false;
+    $('#btn-capture').disabled = true;
+  }
+  function hideCameraProblem() {
+    cameraProblem = null;
+    $('#camera-msg').hidden = true;
+  }
+  // A camera that was live and stopped (noticed by the live read-out's tick).
+  function cameraLost() {
+    stopAuto();
+    stopLive();
+    if (scanner) scanner.stop();
+    updateFlashButton();
+    showCameraProblem('stopped');
+  }
+
   async function startCamera() {
     scanner = createScanner({ video, gridN: mod.current.gridN });
     const ok = await scanner.start();
-    const msg = $('#camera-msg');
     const capBtn = $('#btn-capture');
     if (!ok) {
-      msg.hidden = false;
-      msg.textContent =
-        'Camera unavailable. That is fine — use “Enter colors by hand,” the solver works the same.';
-      capBtn.disabled = true;
+      showCameraProblem(scanner.failureReason());
     } else {
-      msg.hidden = true;
+      hideCameraProblem();
       capBtn.disabled = false;
       // Auto-detect a mirrored (front / selfie) camera and flip guidance to
       // match. Users can still override with the Mirror toggle.
@@ -1159,8 +1210,17 @@ export function initApp() {
   }
   // Pause sampling when the tab is backgrounded; resume when it returns.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopAuto();
-    else if (autoOn) startAuto();
+    if (document.hidden) {
+      stopAuto();
+      return;
+    }
+    if (autoOn) startAuto();
+    // Back in the foreground on Scan with the camera gone (phones end it in the
+    // background): bring it back without making the user hunt for Retry.
+    if (screens.capture.classList.contains('is-active') && (cameraProblem === 'stopped' || (scanner && !scanner.isActive()))) {
+      hideCameraProblem();
+      ensureCamera();
+    }
   });
 
   // ---- hold-steady assist (opt-in, device-motion) ----------------------------
@@ -1762,6 +1822,7 @@ export function initApp() {
     snapshot: () => ({
       guideColors: guide ? guide.shownColors() : null,
       turnCue: isHidden($('#turn-cue')) ? null : $('#turn-cue').dataset.turn,
+      cameraProblem,
       autoRingShown: !isHidden($('#auto-ring')),
       screen: Object.keys(screens).find((k) => screens[k].classList.contains('is-active')),
       size: mod.current.id,
