@@ -1,17 +1,17 @@
-// e2e.test.js — headless browser test of the real built site, served under a
+// e2e/app.test.js — headless browser test of the real built site, served under a
 // /solvent/ subpath to mimic GitHub Pages. Covers DoD #3, #4, #7.
 import { test } from 'node:test';
 import { existsSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
-import { createServer } from '../scripts/serve.mjs';
-import { SOLVED, applyMove } from '../src/core/cube2.js';
-import * as cube2 from '../src/core/cube2.js';
-import size2x2 from '../src/sizes/size2x2.js';
-import size3x3 from '../src/sizes/size3x3.js';
-import * as cube3 from '../src/core/cube3.js';
-import { scanPhotos } from './virtual-camera.js';
+import { createServer } from '../../scripts/serve.mjs';
+import { SOLVED, applyMove } from '../../src/core/cube2.js';
+import * as cube2 from '../../src/core/cube2.js';
+import size2x2 from '../../src/sizes/size2x2.js';
+import size3x3 from '../../src/sizes/size3x3.js';
+import * as cube3 from '../../src/core/cube3.js';
+import { scanPhotos } from '../virtual-camera.js';
 
 // The cloud dev image ships Chromium here; anywhere else (CI, a laptop) fall back
 // to the browser Playwright downloaded itself.
