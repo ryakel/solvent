@@ -303,10 +303,17 @@ function solve(faces) {
       s = applyMove(s, m);
       canon.push(geomFromState(s));
     }
+    // validate() guarantees a consistent mirror cube, so both lookups succeed; if
+    // that ever breaks, fail with words rather than a TypeError at the Solve button.
     const toUser = alignGeom(canon[0], rawGeom);
+    if (!toUser) throw new Error('This cube does not match a real 2×2 — recheck the stickers.');
     const frames = canon.map(toUser);
     const names = [];
-    for (let k = 0; k < frames.length - 1; k++) names.push(findMove(frames[k], frames[k + 1]));
+    for (let k = 0; k < frames.length - 1; k++) {
+      const name = findMove(frames[k], frames[k + 1]);
+      if (!name) throw new Error('Could not read a face turn off the solution — recheck the stickers.');
+      names.push(name);
+    }
     return {
       moves: names.map((name) => ({ name, hint: moveHint(name) })),
       frames,

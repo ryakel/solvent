@@ -16,7 +16,7 @@
 // Everything here is geometric and oracle-derived; mirror2.test.js proves that the
 // physical moves solve thousands of random mirror scrambles to six solid faces.
 
-import { applyGeomMove, geomEquals } from './geometry.js';
+import { applyGeomMove, geomEquals, solvedGeom } from './geometry.js';
 import { geomFromState, stateFromGeom } from './cube2.js';
 
 // Reflect a geometry through the x=0 plane: negate the x of every position and
@@ -33,6 +33,37 @@ export function reflectXGeom(geom) {
 // encode its handedness, so rebuilding geometry from it gives a different cube.
 export function isMirror2(geom) {
   return !geomEquals(geomFromState(stateFromGeom(geom)), geom);
+}
+
+// ---- per-corner handedness ---------------------------------------------------
+//
+// A corner piece's three colours run one way round it — clockwise or counter-
+// clockwise — and no turn or twist changes that. A real cube is either all
+// standard pieces or (a mirror-scheme 2x2) all mirror pieces. Swapping two
+// stickers on one corner, an easy slip while repainting, makes that one corner run
+// the wrong way round while its colour set still looks fine; such a mixed cube is
+// physically impossible, and isMirror2 alone would wave it through as "mirror".
+
+const det3 = (a, b, c) =>
+  a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+const colorKey = (cubie) => cubie.stickers.map((s) => s.color).sort().join('');
+
+// Orientation of the sticker normals taken in a fixed (sorted-colour) order: the
+// sign flips exactly when two stickers trade places, never under a turn or twist.
+function windingSign(cubie) {
+  const s = [...cubie.stickers].sort((a, b) => (a.color < b.color ? -1 : a.color > b.color ? 1 : 0));
+  return Math.sign(det3(s[0].normal, s[1].normal, s[2].normal));
+}
+const STANDARD_WINDING = new Map(solvedGeom().map((c) => [colorKey(c), windingSign(c)]));
+
+// For each corner of `geom`: +1 if it runs the same way round as the real piece
+// with its colours, -1 if it runs the mirror way, 0 if its colours match no real
+// piece (the validator reports that separately).
+export function cornerHandedness(geom) {
+  return geom.map((c) => {
+    const ref = STANDARD_WINDING.get(colorKey(c));
+    return ref === undefined ? 0 : windingSign(c) * ref;
+  });
 }
 
 // The 48 cube isometries as signed 3x3 permutation matrices (24 rotations + 24

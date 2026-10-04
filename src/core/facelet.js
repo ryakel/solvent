@@ -11,7 +11,7 @@
 
 import { FACES, FACE_ORDER, COLORS, SLOTS, solvedGeom } from './geometry.js';
 import { SOLVED, geomFromState, stateFromGeom, statesEqual } from './cube2.js';
-import { isMirror2, reflectXGeom } from './mirror2.js';
+import { isMirror2, reflectXGeom, cornerHandedness } from './mirror2.js';
 
 // A 2x2 has no centres, so a mirror-scheme (left-handed) cube is a real, solvable
 // cube — we accept and solve it. The note lets a user who actually mirrored a
@@ -136,6 +136,7 @@ export function validateFaces(faces) {
 
   // 3. Each corner has three distinct, non-opposite colors and is a real piece.
   const cornerSets = [];
+  const cornerCols = [];
   for (let j = 0; j < SLOTS.length; j++) {
     const slot = SLOTS[j];
     const cols = [];
@@ -145,6 +146,7 @@ export function validateFaces(faces) {
       const idx = FACELET_MAP[face].indexOf(j);
       cols.push(faces[face][idx]);
     }
+    cornerCols.push(cols);
     const key = [...cols].sort().join('');
     cornerSets.push(key);
     const uniq = new Set(cols);
@@ -178,12 +180,28 @@ export function validateFaces(faces) {
 
   if (errors.length) return { ok: false, errors: dedupe(errors) };
 
-  // 5. Orientation parity: total corner twist must be 0 mod 3 (a single twisted
+  // 5. Handedness: every corner's colors run the same way round — all standard
+  //    pieces, or all mirror pieces (a mirror-scheme cube). A mix means stickers
+  //    were swapped within a corner. Name the minority: those are the likely slips.
+  const geom = geomFromFaces(faces);
+  const hand = cornerHandedness(geom);
+  const mirrored = hand.filter((h) => h < 0).length;
+  if (mirrored > 0 && mirrored < hand.length) {
+    const odd = mirrored <= hand.length / 2 ? -1 : 1;
+    hand.forEach((h, j) => {
+      if (h !== odd) return;
+      errors.push(
+        `The ${SLOTS[j].name} corner (${cornerCols[j].join('/')}) has two stickers swapped — its colors run the wrong way round.`
+      );
+    });
+    return { ok: false, errors };
+  }
+
+  // 6. Orientation parity: total corner twist must be 0 mod 3 (a single twisted
   //    corner is unsolvable). A 2x2 has no centres, so a globally left-handed
   //    (mirror) cube is real and solvable; the compact state can't encode its
   //    handedness, so we measure the twist in the correct frame — reflecting a
   //    mirror cube into the standard frame first.
-  const geom = geomFromFaces(faces);
   const mirror = isMirror2(geom);
   const state = stateFromGeom(mirror ? reflectXGeom(geom) : geom);
   const twist = state.co.reduce((a, b) => a + b, 0) % 3;
