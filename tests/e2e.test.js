@@ -529,3 +529,69 @@ test('switching size mid-scan starts a fresh cube that samples the new grid', as
     server.close();
   }
 });
+
+// ---- jumping while a turn animates --------------------------------------------
+
+// Have the page click `selector` on its next task (so the click is certainly
+// dispatched), then report 'ok' if it still answers within `ms`, else 'hung' —
+// a frozen main thread never answers, so the test fails fast instead of hanging.
+async function clickStaysResponsive(page, selector, ms = 3000) {
+  await page.evaluate((sel) => {
+    setTimeout(() => document.querySelector(sel).click(), 0);
+  }, selector);
+  await new Promise((r) => setTimeout(r, 100));
+  return Promise.race([page.evaluate(() => 'ok'), new Promise((r) => setTimeout(() => r('hung'), ms))]);
+}
+
+test('tapping a move or Reset animation mid-turn never freezes the page', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    // Normal motion on purpose: the bug needs a turn genuinely in flight.
+    const context = await browser.newContext();
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+    await page.evaluate((f) => {
+      window.__solvent.goReview();
+      window.__solvent.setFaces(f);
+    }, scrambledFaces(['R', 'U', 'F', "R'", 'U2']));
+    await page.click('#btn-solve');
+    await page.waitForSelector('#screen-solution.is-active');
+    const moveCount = await page.$$eval('#move-list li', (els) => els.length);
+    assert.ok(moveCount >= 3, 'need a few moves to jump across');
+
+    // During Play, tap the last move while a turn is animating.
+    await page.click('#btn-play');
+    await page.waitForTimeout(250);
+    assert.equal(
+      await clickStaysResponsive(page, `#move-list li:nth-child(${moveCount})`),
+      'ok',
+      'page froze after tapping a move mid-turn'
+    );
+    await page.waitForFunction((n) => window.__solvent.getState().stepIndex === n, moveCount, { timeout: 20000 });
+    assert.ok(await page.evaluate(() => window.__solvent.currentFrameSolved()), 'should end on the solved frame');
+
+    // Reset animation while a backward step is in flight.
+    await page.click('#btn-prev');
+    await page.waitForTimeout(200);
+    assert.equal(await clickStaysResponsive(page, '#btn-restart-anim'), 'ok', 'page froze after Reset animation mid-turn');
+    await page.waitForFunction(() => window.__solvent.getState().stepIndex === 0, null, { timeout: 20000 });
+
+    // Two quick taps in opposite directions: the latest one wins, no ping-pong.
+    await page.click(`#move-list li:nth-child(${moveCount})`);
+    await page.waitForTimeout(250);
+    assert.equal(await clickStaysResponsive(page, '#move-list li:nth-child(1)'), 'ok', 'page froze on a second jump');
+    await page.waitForFunction(() => window.__solvent.getState().stepIndex === 1, null, { timeout: 20000 });
+    await page.waitForTimeout(1600); // nothing keeps moving afterwards
+    assert.equal(await page.evaluate(() => window.__solvent.getState().stepIndex), 1);
+
+    assert.deepEqual(errors, [], 'page errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

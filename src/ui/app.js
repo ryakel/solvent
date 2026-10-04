@@ -35,6 +35,11 @@ export function initApp() {
   let solution = null;
   let stepIndex = 0;
   let animating = false;
+  // The turn currently animating (a real, time-taking promise), so anything that
+  // must wait for it — a jump across the move list — awaits it instead of spinning.
+  let inFlight = Promise.resolve();
+  // Bumped by every jump and by Play: only the latest jump keeps stepping.
+  let jumpSeq = 0;
   // Solution auto-play: advances through the moves on a timer, but STRICTLY by
   // awaiting goNext() each step (never a raw timer that could overlap the
   // `animating` guard). `playDelayTimer` is the only bare timeout — the cancelable
@@ -1254,7 +1259,7 @@ export function initApp() {
     const name = sol.moves[stepIndex].name;
     const turn = mod.current.moveToTurn(name);
     const after = sol.frames[stepIndex + 1];
-    if (renderer) await renderer.animateMove(turn, after, ANIM_MS);
+    if (renderer) await (inFlight = renderer.animateMove(turn, after, ANIM_MS));
     animating = false;
     if (solution !== sol) {
       updateStepButtons(); // the turn belonged to a cleared cube; free the controls
@@ -1273,7 +1278,7 @@ export function initApp() {
     const turn = mod.current.moveToTurn(name);
     const reverse = { axis: turn.axis, sign: turn.sign, quarters: -turn.quarters };
     const before = sol.frames[stepIndex - 1];
-    if (renderer) await renderer.animateMove(reverse, before, ANIM_MS);
+    if (renderer) await (inFlight = renderer.animateMove(reverse, before, ANIM_MS));
     animating = false;
     if (solution !== sol) {
       updateStepButtons(); // the turn belonged to a cleared cube; free the controls
@@ -1283,14 +1288,18 @@ export function initApp() {
     updateSolveReadout();
     updateStepButtons();
   }
+  // Step one turn at a time so the animation reads clearly. A turn already in
+  // flight (Play, or a Next tap) is awaited, never spun on: goNext() returns at
+  // once while animating, and looping on that starved the very animation frame
+  // it was waiting for, freezing the page. A newer jump supersedes this one.
   async function jumpTo(target) {
-    // step one at a time so the animation reads clearly
     const sol = solution;
-    while (solution === sol && stepIndex < target) {
-      await goNext();
-    }
-    while (solution === sol && stepIndex > target) {
-      await goPrev();
+    const mine = ++jumpSeq;
+    while (solution === sol && mine === jumpSeq) {
+      if (animating) await inFlight;
+      else if (stepIndex < target) await goNext();
+      else if (stepIndex > target) await goPrev();
+      else break;
     }
   }
 
@@ -1340,6 +1349,7 @@ export function initApp() {
       if (renderer) renderer.setGeom(solution.frames[0]);
       updateSolveReadout();
     }
+    jumpSeq++; // Play takes over from any jump in progress
     playing = true;
     updatePlayButton();
     playLoop();
