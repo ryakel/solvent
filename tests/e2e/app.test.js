@@ -1076,3 +1076,36 @@ test('the screen is kept awake on Scan and Solve, not on Verify, and re-taken af
     server.close();
   }
 });
+
+// ---- unexpected errors -----------------------------------------------------------------
+
+test('an unexpected error shows a plain notice and the app keeps working', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page } = await openWithCamera(browser, port);
+    const notice = () => page.$eval('#oops', (n) => (getComputedStyle(n).display === 'none' ? null : n.textContent));
+    assert.equal(await notice(), null, 'no notice on a healthy start');
+
+    await page.evaluate(() => setTimeout(() => { throw new Error('boom-test'); }));
+    await page.waitForFunction(() => !document.querySelector('#oops').hidden);
+    assert.match(await notice(), /Something went wrong \(boom-test\)\. Your cube is still here/);
+    await page.click('#btn-oops-dismiss');
+    assert.equal(await notice(), null);
+
+    await page.evaluate(() => { Promise.reject(new Error('reject-test')); });
+    await page.waitForFunction(() => !document.querySelector('#oops').hidden);
+    assert.match(await notice(), /reject-test/);
+    await page.click('#btn-oops-dismiss');
+
+    // Still a working app: a face still captures.
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(scrambleState(cube2, ['R'])));
+    await presentFace(page, size2x2, photos[0].cells);
+    await page.click('#btn-capture');
+    assert.equal(await page.evaluate(() => window.__solvent.snapshot().captureIndex), 1);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

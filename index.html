@@ -220,6 +220,15 @@
       <a href="https://github.com/ryakel/solvent" rel="noopener">Source</a>
     </footer>
 
+    <!-- Shown if anything unexpected throws: say so plainly, keep the cube. -->
+    <div class="oops" id="oops" role="alert" hidden>
+      <p class="oops__text" id="oops-text"></p>
+      <div class="oops__actions">
+        <button class="btn" id="btn-oops-copy" type="button">Copy details</button>
+        <button class="btn btn--ghost" id="btn-oops-dismiss" type="button">Dismiss</button>
+      </div>
+    </div>
+
     <script type="module" src="./src/ui/main.js"></script>
   </body>
 </html>

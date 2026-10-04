@@ -39,6 +39,38 @@ function sixSolidFaces(geom) {
 const ANIM_MS = REDUCED_MOTION ? 0 : 720;
 
 export function initApp() {
+  // ---- unexpected errors ------------------------------------------------------
+  // Anything that throws used to just stop: a button that does nothing, a step
+  // that won't advance, no hint why. Say so plainly instead — the cube entered so
+  // far is untouched — with the details one tap away for a bug report. Wired
+  // first so it covers everything below.
+  let oopsDetails = '';
+  function showOops(err) {
+    const message = (err && err.message) || String(err || 'Unknown error');
+    // Chrome reports this harmless ResizeObserver notice as an error event.
+    if (/ResizeObserver loop/.test(message)) return;
+    oopsDetails = `${message}\n\n${(err && err.stack) || '(no stack)'}\n\n${navigator.userAgent}`;
+    document.querySelector('#oops-text').textContent =
+      `Something went wrong (${message}). Your cube is still here — try that again, or tap New cube to start over.`;
+    document.querySelector('#btn-oops-copy').textContent = 'Copy details';
+    document.querySelector('#oops').hidden = false;
+  }
+  window.addEventListener('error', (e) => showOops(e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => showOops(e.reason));
+  document.querySelector('#btn-oops-dismiss').addEventListener('click', () => {
+    document.querySelector('#oops').hidden = true;
+  });
+  document.querySelector('#btn-oops-copy').addEventListener('click', async () => {
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(oopsDetails);
+      ok = true;
+    } catch {
+      ok = fallbackCopy(oopsDetails);
+    }
+    document.querySelector('#btn-oops-copy').textContent = ok ? 'Copied ✓' : 'Copy unavailable';
+  });
+
   const mod = { current: defaultSizeModule() };
   let faces = mod.current.emptyFaces();
   // Per-sticker "this scan read was ambiguous" flags, parallel to `faces`. Only

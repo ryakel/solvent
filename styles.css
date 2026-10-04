@@ -734,6 +734,24 @@ h1 {
 .validation__errs li[data-cells] { cursor: pointer; }
 .validation__errs li[data-cells]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
+/* Something unexpected threw: a calm notice pinned to the bottom of the view. */
+.oops {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 32px));
+  z-index: 50;
+  background: var(--slate-2);
+  border: 1px solid var(--line-2);
+  border-left: 3px solid var(--c-red);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+.oops__text { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: var(--ink); }
+.oops__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
 /* Verify-screen uncertainty summary. Amber-keyed and clearly not the red error
    box — a "look here," paired with the on-net highlights. */
 .uncertain-note {
