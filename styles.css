@@ -718,6 +718,17 @@ h1 {
   transform: scale(1.06);
 }
 .validation__hint { margin: 0 0 8px; font-size: 13px; color: var(--ink-dim); }
+/* Auto-repair offer: the one slip that explains the errors, as a single tap. */
+.validation__repair {
+  margin-top: 12px;
+  border: 1px solid rgba(43, 127, 255, 0.45);
+  border-left: 3px solid var(--c-blue);
+  background: rgba(43, 127, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.validation__repair p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: var(--ink); }
+.validation__ok .btn { margin-left: 12px; padding: 6px 12px; font-size: 13px; }
 .validation__errs li[data-cells] { cursor: pointer; }
 .validation__errs li[data-cells]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 

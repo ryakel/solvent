@@ -6,6 +6,7 @@ import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
 import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
+import { findRepair, applyRepair } from '../sizes/repair.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 // Show/hide by the `hidden` ATTRIBUTE. `el.hidden = …` only works on HTML
@@ -654,6 +655,7 @@ export function initApp() {
         st.dataset.cell = `${f}:${i}`;
         markSticker(st, f, i);
         st.addEventListener('click', () => {
+          undoRepair = null; // a hand edit supersedes undoing an auto-fix
           faces[f][i] = paintColor;
           // The user just verified this sticker by hand — clear its "recheck"
           // flag so the highlight and the summary count stay honest.
@@ -734,7 +736,39 @@ export function initApp() {
     }
   }
 
+  // ---- auto-repair (sizes/repair.js) ------------------------------------------
+  // When the cube isn't real, look for the one slip that explains it — a face
+  // read turned, two faces swapped — and offer it as one tap, with Undo. Run just
+  // after validation (a few ms) and dropped if the stickers change meanwhile.
+  let repairToken = 0;
+  let undoRepair = null; // { faces, lowConf } from before the last applied fix
+  const copyFaces = (x) => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, v.slice()]));
+  function offerRepair() {
+    const token = repairToken;
+    setTimeout(() => {
+      if (token !== repairToken) return;
+      const r = findRepair(mod.current, faces);
+      if (!r || token !== repairToken) return;
+      const div = el('div', 'validation__repair');
+      div.appendChild(el('p', null, r.message));
+      const btn = el('button', 'btn btn--primary', 'Apply fix');
+      btn.type = 'button';
+      btn.id = 'btn-apply-repair';
+      btn.addEventListener('click', () => {
+        undoRepair = { faces: copyFaces(faces), lowConf: copyFaces(lowConf) };
+        faces = r.faces;
+        lowConf = applyRepair(lowConf, r, mod.current.gridN); // flags travel with their stickers
+        refreshNet();
+        refreshFaceProgress();
+        validateNow();
+      });
+      div.appendChild(btn);
+      $('#validation').appendChild(div);
+    }, 0);
+  }
+
   function validateNow() {
+    repairToken++; // any repair search for the previous stickers is stale
     updateUncertainNote();
     const box = $('#validation');
     const solveBtn = $('#btn-solve');
@@ -758,6 +792,20 @@ export function initApp() {
     if (ok) {
       const div = el('div', 'validation__ok', 'This is a real, solvable cube. Ready to solve.');
       box.appendChild(div);
+      if (undoRepair) {
+        const undo = el('button', 'btn btn--ghost', 'Undo fix');
+        undo.type = 'button';
+        undo.id = 'btn-undo-repair';
+        undo.addEventListener('click', () => {
+          faces = undoRepair.faces;
+          lowConf = undoRepair.lowConf;
+          undoRepair = null;
+          refreshNet();
+          refreshFaceProgress();
+          validateNow();
+        });
+        div.appendChild(undo);
+      }
       if (mirror && warning) {
         box.appendChild(el('div', 'validation__note', warning));
       }
@@ -789,6 +837,7 @@ export function initApp() {
       div.appendChild(ul);
       box.appendChild(div);
       solveBtn.disabled = true;
+      offerRepair();
     }
     return ok;
   }
@@ -1255,6 +1304,7 @@ export function initApp() {
     lastCaptureView = null;
     rescanBase = null;
     viewChanged = false;
+    undoRepair = null;
     hideCaptureWarning();
     hideTurnCue();
     clearSolutionView();
@@ -1679,6 +1729,7 @@ export function initApp() {
   window.__solvent = {
     setFaces(next) {
       faces = next;
+      undoRepair = null;
       // Manually-injected faces (and the e2e path) carry no scan confidence, so
       // clear any flags — uncertainty is a camera-only signal.
       lowConf = emptyLowConf();

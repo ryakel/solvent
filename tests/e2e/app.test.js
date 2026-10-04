@@ -882,3 +882,40 @@ test('Verify rings the stickers each finding is about, and clears them once fixe
     server.close();
   }
 });
+
+test('Verify offers a one-tap fix for a face read turned, with Undo', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext();
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+
+    const good = scrambledFaces(['R', 'U', "F'", 'R2', "U'"]);
+    const bad = JSON.parse(JSON.stringify(good));
+    bad.U = [bad.U[2], bad.U[0], bad.U[3], bad.U[1]]; // read a quarter-turn off
+    await page.evaluate((f) => {
+      window.__solvent.goReview();
+      window.__solvent.setFaces(f);
+    }, bad);
+    await page.waitForSelector('#btn-apply-repair');
+    assert.match(await page.textContent('.validation__repair'), /Up face looks like it was read turned/);
+
+    await page.click('#btn-apply-repair');
+    await page.waitForSelector('.validation__ok');
+    assert.deepEqual((await page.evaluate(() => window.__solvent.snapshot())).faces, good);
+
+    await page.click('#btn-undo-repair');
+    await page.waitForSelector('.validation__errs');
+    assert.deepEqual((await page.evaluate(() => window.__solvent.snapshot())).faces, bad);
+
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
