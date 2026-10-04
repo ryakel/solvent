@@ -5,6 +5,7 @@ import { SIZE_MODULES, getSizeModule, defaultSizeModule } from '../sizes/index.j
 import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
+import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
 import { stateFromGeom, isSolved } from '../core/cube2.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -194,17 +195,13 @@ export function initApp() {
   function selectSize(id) {
     if (id === mod.current.id) return;
     mod.current = getSizeModule(id);
-    faces = mod.current.emptyFaces();
-    lowConf = emptyLowConf();
-    captureIndex = 0;
-    solution = null;
     [...sizeButtons.children].forEach((b) => {
       if (!b.disabled) b.setAttribute('aria-pressed', String(b.textContent === mod.current.name));
     });
     buildReticle();
-    buildFaceProgress();
-    buildNet();
     buildPalette();
+    // A live camera keeps running across the switch but must sample the new grid.
+    if (scanner) scanner.setGridN(mod.current.gridN);
     // The guide cube and the solution renderer are per-size (grid + geometry), so
     // rebuild both for the new module. The renderer is recreated lazily on solve.
     if (guide) {
@@ -216,8 +213,8 @@ export function initApp() {
       renderer.dispose();
       renderer = null;
     }
-    updateCaptureTarget();
-    showScreen('capture');
+    // A different size is a different cube: start it from a clean slate.
+    newCube();
   }
 
   // ---- screens ----
@@ -427,8 +424,12 @@ export function initApp() {
       grid.innerHTML = '';
       for (let i = 0; i < n * n; i++) grid.appendChild(el('i'));
     }
+    // Stored faces are in facelet order; lay this one out the way the camera sees
+    // it at its scan step so it matches the cube in front of the lens.
+    const step = scanSeq().find((s) => s.face === f);
+    const seen = faceToCamera(step && step.cameraToFacelet, faces[f]);
     [...grid.children].forEach((cell, i) => {
-      cell.style.background = mod.current.colorHex[faces[f][i]] || 'transparent';
+      cell.style.background = mod.current.colorHex[seen[i]] || 'transparent';
     });
   }
 
@@ -664,6 +665,16 @@ export function initApp() {
   const nudgeDismiss = $('#btn-mirror-nudge-dismiss');
   if (nudgeDismiss) nudgeDismiss.addEventListener('click', dismissMirrorNudge);
 
+  // Start the camera unless it is already running (or starting), so no path —
+  // boot, Back to scan, New cube — can ever open a second stream.
+  let cameraStarting = null;
+  function ensureCamera() {
+    if ((scanner && scanner.isActive()) || cameraStarting) return;
+    cameraStarting = startCamera().finally(() => {
+      cameraStarting = null;
+    });
+  }
+
   async function startCamera() {
     scanner = createScanner({ video, gridN: mod.current.gridN });
     const ok = await scanner.start();
@@ -704,17 +715,21 @@ export function initApp() {
     const samples = scanner.sample();
     if (!samples) return false;
     const order = scanFaces();
-    const f = order[captureIndex];
+    const step = scanSeq()[captureIndex];
+    const f = step.face;
+    // The camera reads cells in its own frame; re-seat them onto the facelet grid
+    // (U and D arrive rotated — see sizes/scanpath.js).
+    const seat = (cells) => cameraToFace(step.cameraToFacelet, cells);
     // Classify with a confidence margin when the module supports it, so genuinely
     // ambiguous reads get flagged for a recheck at Verify. Falls back cleanly to
     // the plain classifier (and no flags) for a module that doesn't opt in.
     const thr = mod.current.confidenceThreshold ?? 0;
     if (typeof mod.current.classifyColorDetailed === 'function') {
       const detailed = samples.map((rgb) => mod.current.classifyColorDetailed(rgb));
-      faces[f] = detailed.map((d) => d.color);
-      lowConf[f] = detailed.map((d) => d.confidence < thr);
+      faces[f] = seat(detailed.map((d) => d.color));
+      lowConf[f] = seat(detailed.map((d) => d.confidence < thr));
     } else {
-      faces[f] = samples.map((rgb) => mod.current.classifyColor(rgb));
+      faces[f] = seat(samples.map((rgb) => mod.current.classifyColor(rgb)));
       lowConf[f] = faces[f].map(() => false);
     }
     dismissMirrorNudge();
@@ -1003,15 +1018,48 @@ export function initApp() {
   $('#btn-manual').addEventListener('click', goReview);
   $('#btn-back-capture').addEventListener('click', () => {
     showScreen('capture');
-    startCamera();
+    ensureCamera();
   });
-  $('#btn-reset').addEventListener('click', () => {
+  // Verify's reset: the same clean slate as New cube, but stay here for manual entry.
+  $('#btn-reset').addEventListener('click', resetCube);
+
+  // ---- new cube -------------------------------------------------------------
+  // Clear everything that describes THE CUBE — stickers, scan flags, scan step,
+  // the solution and its playback — so nothing from one cube leaks into the
+  // next. What describes the phone (Mirror, Sound, Auto-capture, Flash,
+  // hold-steady) is deliberately kept. Nothing is persisted across reloads, so
+  // this in-page reset is the only state there is to clear.
+  function resetCube() {
+    stopPlay();
+    stopAuto();
     faces = mod.current.emptyFaces();
     lowConf = emptyLowConf();
-    refreshNet();
-    refreshFaceProgress();
+    captureIndex = 0;
+    solution = null;
+    stepIndex = 0;
+    clearSolutionView();
+    buildFaceProgress();
+    buildNet();
+    updateCaptureTarget();
     validateNow();
-  });
+  }
+  function clearSolutionView() {
+    $('#move-list').innerHTML = '';
+    $('#solution-lede').textContent = '';
+    $('#move-counter').textContent = 'Move 0 / 0';
+    $('#move-hint').textContent = 'Ready.';
+    for (const id of ['#solution-setup', '#solution-mirror-note']) {
+      const n = $(id);
+      if (n) n.hidden = true;
+    }
+  }
+  // Start the next cube: clean slate, back to step 1, camera running once.
+  function newCube() {
+    resetCube();
+    showScreen('capture');
+    ensureCamera();
+  }
+  $('#btn-new-cube').addEventListener('click', newCube);
 
   // ---- solve ----
   $('#btn-solve').addEventListener('click', () => {
@@ -1181,8 +1229,9 @@ export function initApp() {
     refreshMoveList();
   }
   function updateStepButtons() {
+    const total = solution ? solution.moves.length : 0;
     $('#btn-prev').disabled = animating || stepIndex <= 0;
-    $('#btn-next').disabled = animating || stepIndex >= solution.moves.length;
+    $('#btn-next').disabled = animating || stepIndex >= total;
     updatePlayButton();
   }
   function updatePlayButton() {
@@ -1195,39 +1244,52 @@ export function initApp() {
     btn.setAttribute('aria-label', playing ? 'Pause the solution' : 'Play the solution');
   }
 
+  // Each step remembers which solution it belongs to: if a New cube lands while a
+  // turn is animating, the finishing turn must not advance the next cube.
   async function goNext() {
-    if (animating || stepIndex >= solution.moves.length) return;
+    if (animating || !solution || stepIndex >= solution.moves.length) return;
+    const sol = solution;
     animating = true;
     updateStepButtons();
-    const name = solution.moves[stepIndex].name;
+    const name = sol.moves[stepIndex].name;
     const turn = mod.current.moveToTurn(name);
-    const after = solution.frames[stepIndex + 1];
+    const after = sol.frames[stepIndex + 1];
     if (renderer) await renderer.animateMove(turn, after, ANIM_MS);
-    stepIndex++;
     animating = false;
+    if (solution !== sol) {
+      updateStepButtons(); // the turn belonged to a cleared cube; free the controls
+      return;
+    }
+    stepIndex++;
     updateSolveReadout();
     updateStepButtons();
   }
   async function goPrev() {
-    if (animating || stepIndex <= 0) return;
+    if (animating || !solution || stepIndex <= 0) return;
+    const sol = solution;
     animating = true;
     updateStepButtons();
-    const name = solution.moves[stepIndex - 1].name;
+    const name = sol.moves[stepIndex - 1].name;
     const turn = mod.current.moveToTurn(name);
     const reverse = { axis: turn.axis, sign: turn.sign, quarters: -turn.quarters };
-    const before = solution.frames[stepIndex - 1];
+    const before = sol.frames[stepIndex - 1];
     if (renderer) await renderer.animateMove(reverse, before, ANIM_MS);
-    stepIndex--;
     animating = false;
+    if (solution !== sol) {
+      updateStepButtons(); // the turn belonged to a cleared cube; free the controls
+      return;
+    }
+    stepIndex--;
     updateSolveReadout();
     updateStepButtons();
   }
   async function jumpTo(target) {
     // step one at a time so the animation reads clearly
-    while (stepIndex < target) {
+    const sol = solution;
+    while (solution === sol && stepIndex < target) {
       await goNext();
     }
-    while (stepIndex > target) {
+    while (solution === sol && stepIndex > target) {
       await goPrev();
     }
   }
@@ -1256,7 +1318,7 @@ export function initApp() {
     });
   }
   async function playLoop() {
-    while (playing && stepIndex < solution.moves.length) {
+    while (playing && solution && stepIndex < solution.moves.length) {
       await goNext();
       if (!playing) break;
       await restRoughly(REDUCED_MOTION ? 140 : 460);
@@ -1341,19 +1403,7 @@ export function initApp() {
     stopPlay();
     jumpTo(0);
   });
-  $('#btn-new').addEventListener('click', () => {
-    stopPlay();
-    faces = mod.current.emptyFaces();
-    lowConf = emptyLowConf();
-    captureIndex = 0;
-    solution = null;
-    stepIndex = 0;
-    buildFaceProgress();
-    buildNet();
-    updateCaptureTarget();
-    showScreen('capture');
-    startCamera();
-  });
+  $('#btn-new').addEventListener('click', newCube);
 
   // keyboard stepping
   document.addEventListener('keydown', (e) => {
@@ -1377,7 +1427,7 @@ export function initApp() {
   updateCaptureTarget();
   showScreen('capture');
   if (guide) guide.start();
-  startCamera();
+  ensureCamera();
 
   // expose a tiny hook for the e2e test to drive deterministically.
   window.__solvent = {
@@ -1404,5 +1454,16 @@ export function initApp() {
     // Auto-play state, so the e2e can click Play and assert it reaches solved
     // then stops on its own.
     isPlaying: () => playing,
+    // Everything that belongs to the current cube, so the e2e can prove a New
+    // cube starts from nothing.
+    snapshot: () => ({
+      screen: Object.keys(screens).find((k) => screens[k].classList.contains('is-active')),
+      size: mod.current.id,
+      captureIndex,
+      faces: JSON.parse(JSON.stringify(faces)),
+      lowConf: JSON.parse(JSON.stringify(lowConf)),
+      hasSolution: !!solution,
+      stepIndex,
+    }),
   };
 }

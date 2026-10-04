@@ -25,9 +25,12 @@
 
     <header class="app-header">
       <img class="wordmark" src="./assets/solvent-wordmark.png" alt="Solvent — scan · verify · solve" />
-      <div class="size-select" role="group" aria-label="Cube size">
-        <span class="size-select__label">Size</span>
-        <div id="size-buttons" class="size-buttons"></div>
+      <div class="header-actions">
+        <div class="size-select" role="group" aria-label="Cube size">
+          <span class="size-select__label">Size</span>
+          <div id="size-buttons" class="size-buttons"></div>
+        </div>
+        <button class="header-btn" id="btn-new-cube" type="button" title="Clear this cube and start scanning the next one from step 1.">New cube</button>
       </div>
     </header>
 
@@ -180,7 +183,7 @@
             <div class="stepper">
               <button class="btn btn--ghost" id="btn-restart-anim">Reset animation</button>
               <button class="btn btn--ghost" id="btn-copy" aria-label="Copy move list to clipboard">Copy moves</button>
-              <button class="btn btn--ghost" id="btn-new">New scan</button>
+              <button class="btn btn--ghost" id="btn-new">New cube</button>
             </div>
           </div>
         </div>
