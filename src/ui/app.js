@@ -9,6 +9,10 @@ import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
 import { stateFromGeom, isSolved } from '../core/cube2.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
+// Show/hide by the `hidden` ATTRIBUTE. `el.hidden = …` only works on HTML
+// elements: on an <svg> it just sets a plain JS property and the attribute (and
+// so the element's visibility) never changes.
+const setHidden = (node, hide) => node.toggleAttribute('hidden', hide);
 const el = (tag, cls, txt) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -786,10 +790,10 @@ export function initApp() {
     // p in [0,1]; pathLength is 100, dashoffset 100 -> 0 as it fills.
     if (!autoRing || !autoRingFill) return;
     if (p == null) {
-      autoRing.hidden = true;
+      setHidden(autoRing, true);
       return;
     }
-    autoRing.hidden = false;
+    setHidden(autoRing, false);
     autoRingFill.style.strokeDashoffset = String(100 * (1 - p));
   }
   function autoActive() {
