@@ -3,8 +3,8 @@
 // The camera reads a face in its own frame: row-major, left->right = +x, top->bottom
 // = -y, with the presented face toward the camera (+z). The facelet grids
 // (core/facelet.js, core/facelet3.js) read each face in a fixed documented
-// orientation instead. The two agree for the side faces, but the scan path reaches
-// U and D by tilting from a side face, so those arrive rotated in the camera's view.
+// orientation instead. The two agree for faces shown upright, but once the scan
+// path tilts the cube, the faces after it arrive rotated in the camera's view.
 //
 // Rather than hand-writing per-face rotations, derive the mapping from the geometry
 // oracle: label every sticker of a cube uniquely, turn it through the scan path's
