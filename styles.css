@@ -25,6 +25,11 @@
 
 * { box-sizing: border-box; }
 
+/* `hidden` must always win. An author `display` (grid, flex…) otherwise beats the
+   browser's [hidden] rule, and SVG elements don't get that rule at all — which is
+   how an empty, 85%-black message box sat over the live camera preview. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -299,8 +304,6 @@ h1 {
   overflow: visible;
   transform: rotate(-90deg); /* start the sweep from 12 o'clock */
 }
-/* An author `display` beats the UA [hidden] rule, so restore it explicitly. */
-.auto-ring[hidden] { display: none; }
 .auto-ring__track,
 .auto-ring__fill {
   fill: none;
@@ -337,7 +340,6 @@ h1 {
   border: 1px solid var(--line-2);
   backdrop-filter: blur(2px);
 }
-.steady-pill[hidden] { display: none; }
 .steady-pill__dot {
   width: 9px;
   height: 9px;

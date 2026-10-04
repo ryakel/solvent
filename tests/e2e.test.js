@@ -529,3 +529,39 @@ test('switching size mid-scan starts a fresh cube that samples the new grid', as
     server.close();
   }
 });
+
+// ---- [hidden] means hidden ----------------------------------------------------------
+
+test('every element marked hidden is really hidden, and nothing covers the live preview', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const leaks = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll('[hidden]')]
+          .filter((n) => getComputedStyle(n).display !== 'none')
+          .map((n) => '#' + (n.id || n.className))
+      );
+    assert.deepEqual(await leaks(), [], 'hidden elements still displayed on Scan');
+    // Nothing sits over the live video (the reticle and dots are pointer-
+    // transparent, so the hit test lands on the video; the old scrim was hit).
+    const top = await page.evaluate(() => {
+      const r = document.querySelector('#reticle').getBoundingClientRect();
+      const n = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return '#' + (n.id || n.className);
+    });
+    assert.equal(top, '#video');
+    await page.click('#btn-manual');
+    assert.deepEqual(await leaks(), [], 'hidden elements still displayed on Verify');
+    await page.evaluate((f) => window.__solvent.setFaces(f), scrambledFaces(['R', 'U']));
+    await page.click('#btn-solve');
+    await page.waitForSelector('#screen-solution.is-active');
+    assert.deepEqual(await leaks(), [], 'hidden elements still displayed on Solve');
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
