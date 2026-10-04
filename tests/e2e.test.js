@@ -701,3 +701,66 @@ test('a face that does not fit is held at capture, with Rescan and Keep', async 
     server.close();
   }
 });
+
+// ---- [hidden] means hidden ----------------------------------------------------------
+
+test('every element marked hidden is really hidden, and nothing covers the live preview', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const leaks = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll('[hidden]')]
+          .filter((n) => getComputedStyle(n).display !== 'none')
+          .map((n) => '#' + (n.id || n.className))
+      );
+    // Live capture screen: the message box, the selfie hint, the empty read-back...
+    assert.deepEqual(await leaks(), [], 'hidden elements still displayed on Scan');
+    // ...and nothing sits over the live video. (The reticle, dots and cue are
+    // pointer-transparent overlays, so the hit test lands on the video itself;
+    // the old message-box scrim was what it hit instead.)
+    const top = await page.evaluate(() => {
+      const r = document.querySelector('#reticle').getBoundingClientRect();
+      const n = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return '#' + (n.id || n.className);
+    });
+    assert.equal(top, '#video');
+    // Same guarantee on the other screens.
+    await page.click('#btn-manual');
+    assert.deepEqual(await leaks(), [], 'hidden elements still displayed on Verify');
+    await page.evaluate((f) => window.__solvent.setFaces(f), scrambledFaces(['R', 'U']));
+    await page.click('#btn-solve');
+    await page.waitForSelector('#screen-solution.is-active');
+    assert.deepEqual(await leaks(), [], 'hidden elements still displayed on Solve');
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('auto-capture shows its countdown ring, then captures on its own', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(scrambleState(cube2, ['R', 'U'])));
+    await page.click('#btn-auto');
+    await presentFace(page, size2x2, photos[0].cells);
+    // Held steady and read cleanly: the ring appears (it never did while an
+    // <svg> was "hidden" by property instead of attribute)...
+    await page.waitForFunction(() => window.__solvent.snapshot().autoRingShown, null, { timeout: 5000 });
+    assert.equal(await page.$eval('#auto-ring', (n) => getComputedStyle(n).display), 'block');
+    // ...and the face is captured without a click.
+    await page.waitForFunction(() => window.__solvent.snapshot().captureIndex === 1, null, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => window.__solvent.snapshot().autoRingShown), false);
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
