@@ -369,6 +369,9 @@ export const size2x2 = {
   scanSequence: SCAN_SEQUENCE,
   describeScanStep,
   checkCapture,
+  // faces (possibly incomplete) -> geometry in the first scan's frame; drives the
+  // guide cube's colours
+  facesToGeom: geomFromFaces,
   emptyFaces,
   validate: validateFaces,
   classifyColor,

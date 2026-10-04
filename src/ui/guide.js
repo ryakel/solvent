@@ -16,6 +16,10 @@
 //     "keep going" cue than a static half-circle.
 //   • setMirror() reflects the whole demonstration left-for-right to match a
 //     mirrored (selfie) camera preview, so guide and preview always agree.
+//   • setColors() paints the demo cube as THE USER'S cube: stickers scanned so
+//     far in their real colours, the rest a neutral "not scanned yet" grey. The
+//     face just scanned visibly swings away and a grey face swings in — the
+//     user's own turn, not a solved cube's.
 //
 // Honors prefers-reduced-motion by snapping to the target pose with a static
 // arrow instead of looping the demonstration.
@@ -89,6 +93,16 @@ export function createGuide(container, opts) {
     side: THREE.DoubleSide,
   });
   const stickerMat = {};
+  // A sticker not scanned yet: flat, dark and quiet, so the scanned colours lead.
+  const matUnscanned = new THREE.MeshStandardMaterial({
+    color: 0x2b323c,
+    roughness: 0.7,
+    side: THREE.DoubleSide,
+  });
+  // Every sticker tile by `pos|normal` in the cube's own frame (the frame of the
+  // first scan), so setColors() can repaint any geometry onto it.
+  const tiles = new Map();
+  const tileKey = (pos, normal) => pos.join(',') + '|' + normal.join(',');
   const mat = (c) =>
     (stickerMat[c] ||= new THREE.MeshStandardMaterial({
       color: new THREE.Color(colorHex[c]),
@@ -106,9 +120,29 @@ export function createGuide(container, opts) {
       tile.position.set(s.normal[0] * d, s.normal[1] * d, s.normal[2] * d);
       tile.lookAt(tile.position.clone().multiplyScalar(2));
       g.add(tile);
+      tiles.set(tileKey(c.pos, s.normal), { tile, color: s.color });
     }
     g.position.set(c.pos[0] * posScale, c.pos[1] * posScale, c.pos[2] * posScale);
     cube.add(g);
+  }
+
+  // Repaint the demo cube from a geometry in the first scan's frame; a sticker
+  // whose colour is null/undefined shows as not scanned yet.
+  function setColors(geom) {
+    for (const c of geom) {
+      for (const s of c.stickers) {
+        const entry = tiles.get(tileKey(c.pos, s.normal));
+        if (!entry) continue;
+        entry.color = s.color || null;
+        entry.tile.material = entry.color ? mat(entry.color) : matUnscanned;
+      }
+    }
+  }
+  // What each sticker currently shows ({ 'pos|normal': colour | null }) — for tests.
+  function shownColors() {
+    const out = {};
+    for (const [k, v] of tiles) out[k] = v.color;
+    return out;
   }
 
   // ---- turn indicators: curved arrow + rotation axis, flat and engineered ----
@@ -434,5 +468,5 @@ export function createGuide(container, opts) {
     }
   }
 
-  return { showStep, setSequence, setMirror, start, stop, resize, dispose };
+  return { showStep, setSequence, setMirror, setColors, shownColors, start, stop, resize, dispose };
 }

@@ -702,6 +702,78 @@ test('a face that does not fit is held at capture, with Rescan and Keep', async 
   }
 });
 
+// ---- the guide shows this cube; the turn cue rides the preview --------------------
+
+// What the guide cube should show for `faces`: scanned stickers in colour, the
+// rest null; a 3x3's unscanned centres in the start instruction's colours.
+function expectedGuide(mod, faces) {
+  const shown = {};
+  for (const f of mod.faceOrder) {
+    shown[f] = faces[f].slice();
+    if (mod.hasCenters) {
+      const c = Math.floor(shown[f].length / 2);
+      if (shown[f][c] == null) shown[f][c] = mod.solvedFaces[f][c];
+    }
+  }
+  const out = {};
+  for (const c of mod.facesToGeom(shown)) {
+    for (const s of c.stickers) out[c.pos.join(',') + '|' + s.normal.join(',')] = s.color ?? null;
+  }
+  return out;
+}
+
+test('the guide cube shows the stickers scanned so far, and the next turn sweeps over the preview', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const snap = () => page.evaluate(() => window.__solvent.snapshot());
+
+    // Nothing scanned: an all-unscanned 2x2.
+    let s0 = await snap();
+    assert.ok(Object.values(s0.guideColors).every((c) => c === null), 'a fresh 2x2 guide shows no colours');
+
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'"])));
+    const cues = [];
+    for (let k = 0; k < 5; k++) {
+      await presentFace(page, size2x2, photos[k].cells, { mirrored: k >= 2 });
+      await page.click('#btn-capture');
+      const s = await snap();
+      // Exactly the faces captured so far are painted, in their scanned colours.
+      assert.deepEqual(s.guideColors, expectedGuide(size2x2, s.faces), `guide colours after capture ${k + 1}`);
+      cues.push(s.turnCue);
+      if (k === 1) {
+        // Turning Mirror on re-points the cue already on screen...
+        await page.click('#btn-mirror');
+        assert.equal((await snap()).turnCue, 'right');
+      }
+    }
+    // ...and later yaws read mirrored. After F and R: yaw left; after B (Mirror
+    // on): right; after L: tip forward; after U: the 180° flip.
+    assert.deepEqual(cues, ['left', 'left', 'right', 'down', 'flip']);
+
+    // New cube wipes the guide back to unscanned.
+    await page.click('#btn-new-cube');
+    await page.waitForFunction(() => window.__solvent.snapshot().captureIndex === 0);
+    s0 = await snap();
+    assert.ok(Object.values(s0.guideColors).every((c) => c === null));
+    assert.equal(s0.turnCue, null);
+
+    // A fresh 3x3 shows only the centres the start instruction asks for.
+    await page.click('.size-btn:nth-child(2)');
+    await page.waitForFunction(() => window.__solvent.snapshot().size === '3x3');
+    const s3 = await snap();
+    assert.deepEqual(s3.guideColors, expectedGuide(size3x3, s3.faces));
+    assert.equal(Object.values(s3.guideColors).filter(Boolean).length, 6, 'just the six centres');
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
 // ---- [hidden] means hidden ----------------------------------------------------------
 
 test('every element marked hidden is really hidden, and nothing covers the live preview', async () => {

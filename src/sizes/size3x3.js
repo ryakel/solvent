@@ -180,6 +180,9 @@ export const size3x3 = {
   scanSequence: SCAN_SEQUENCE,
   describeScanStep,
   checkCapture,
+  // faces (possibly incomplete) -> geometry in the first scan's frame; drives the
+  // guide cube's colours
+  facesToGeom: geomFromRawFaces,
   emptyFaces,
   validate: validateFaces,
   classifyColor,

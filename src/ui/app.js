@@ -269,6 +269,7 @@ export function initApp() {
     if (name === 'review') refreshNet(), validateNow();
     if (guide) {
       if (name === 'capture') {
+        refreshGuideColors(); // stickers may have been repainted at Verify
         guide.start();
         guide.showStep(captureIndex);
       } else {
@@ -417,6 +418,7 @@ export function initApp() {
       chip.addEventListener('click', () => {
         captureIndex = i;
         hideCaptureWarning();
+        hideTurnCue();
         updateCaptureTarget();
       });
       wrap.appendChild(chip);
@@ -458,6 +460,7 @@ export function initApp() {
     $('#capture-face-swatch').style.background = mod.current.colorHex[mod.current.faceColor[f]];
     $('#capture-face-hint').textContent = text;
     renderReadback(f);
+    refreshGuideColors();
     if (guide) guide.showStep(captureIndex);
     refreshFaceProgress();
   }
@@ -490,6 +493,62 @@ export function initApp() {
     });
   }
 
+  // The guide shows THIS cube: stickers scanned so far in their real colours,
+  // the rest "not scanned yet". A 3x3's unscanned centres show the colours the
+  // start instruction names (White top, Green front) — that is the grip asked for.
+  function refreshGuideColors() {
+    if (!guide || typeof mod.current.facesToGeom !== 'function') return;
+    const shown = {};
+    for (const f of mod.current.faceOrder) {
+      shown[f] = faces[f].slice();
+      if (mod.current.hasCenters) {
+        const c = Math.floor(shown[f].length / 2);
+        if (shown[f][c] == null) shown[f][c] = mod.current.solvedFaces[f][c];
+      }
+    }
+    guide.setColors(mod.current.facesToGeom(shown));
+  }
+
+  // ---- turn cue over the preview ----------------------------------------------
+  // Right after a capture moves on, the next turn sweeps across the camera
+  // preview, where the user is looking. Mirrored with the preview.
+  const CUE_PATHS = {
+    left: 'M 74 34 C 62 18, 38 18, 26 34',
+    right: 'M 26 34 C 38 18, 62 18, 74 34',
+    down: 'M 64 22 C 79 37, 79 63, 64 78',
+    up: 'M 64 78 C 79 63, 79 37, 64 22',
+    flip: 'M 62 16 C 88 32, 88 68, 62 84',
+  };
+  let cueTimer = 0;
+  function cueKind(turn) {
+    if (!turn) return null;
+    if (turn.axis === 'y') {
+      let left = turn.deg < 0;
+      if (mirror) left = !left;
+      return left ? 'left' : 'right';
+    }
+    if (Math.abs(turn.deg) >= 180) return 'flip';
+    return turn.deg > 0 ? 'down' : 'up';
+  }
+  function showTurnCue() {
+    const svg = $('#turn-cue');
+    const kind = svg && cueKind(scanSeq()[captureIndex].turn);
+    if (!kind) return hideTurnCue();
+    svg.dataset.turn = kind;
+    for (const p of svg.querySelectorAll('path[data-line]')) p.setAttribute('d', CUE_PATHS[kind]);
+    svg.querySelector('.turn-cue__label').textContent = kind === 'flip' ? '180°' : '';
+    setHidden(svg, true); // re-showing restarts the sweep
+    void svg.getBoundingClientRect();
+    setHidden(svg, false);
+    clearTimeout(cueTimer);
+    cueTimer = setTimeout(hideTurnCue, 2600);
+  }
+  function hideTurnCue() {
+    clearTimeout(cueTimer);
+    const svg = $('#turn-cue');
+    if (svg) setHidden(svg, true);
+  }
+
   // The animated guide cube demonstrates how to turn the cube to show each face.
   function ensureGuide() {
     if (guide) return;
@@ -504,6 +563,7 @@ export function initApp() {
         onArrive: pulseArrival,
       });
       guide.setMirror(mirror);
+      refreshGuideColors();
       if (screens.capture.classList.contains('is-active')) guide.start();
     } catch (err) {
       guide = null; // WebGL unavailable: text guidance still covers it.
@@ -541,6 +601,7 @@ export function initApp() {
     }
     if (guide) guide.setMirror(mirror);
     updateCaptureTarget();
+    if (!isHidden($('#turn-cue'))) showTurnCue();
   }
 
   // The selfie-camera nudge (see mirrorNudgeSpent). Shown at most once, and never
@@ -827,6 +888,7 @@ export function initApp() {
       goReview();
     } else {
       confirmFeedback('tick');
+      showTurnCue();
     }
   }
 
@@ -870,6 +932,7 @@ export function initApp() {
   $('#btn-skip-face').addEventListener('click', () => {
     stopAuto(); // a manual jump: drop any in-progress auto countdown
     hideCaptureWarning();
+    hideTurnCue();
     captureIndex = (captureIndex + 1) % scanFaces().length;
     updateCaptureTarget();
   });
@@ -1125,6 +1188,7 @@ export function initApp() {
     stopAuto();
     stopLive();
     hideCaptureWarning();
+    hideTurnCue();
     if (scanner) scanner.stop();
     updateFlashButton();
     buildNet();
@@ -1156,6 +1220,7 @@ export function initApp() {
     rescanBase = null;
     viewChanged = false;
     hideCaptureWarning();
+    hideTurnCue();
     clearSolutionView();
     buildFaceProgress();
     buildNet();
@@ -1602,6 +1667,8 @@ export function initApp() {
     // Everything that belongs to the current cube, so the e2e can prove a New
     // cube starts from nothing.
     snapshot: () => ({
+      guideColors: guide ? guide.shownColors() : null,
+      turnCue: isHidden($('#turn-cue')) ? null : $('#turn-cue').dataset.turn,
       autoRingShown: !isHidden($('#auto-ring')),
       screen: Object.keys(screens).find((k) => screens[k].classList.contains('is-active')),
       size: mod.current.id,
