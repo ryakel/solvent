@@ -1024,3 +1024,55 @@ test('a camera that drops mid-scan is noticed, and Retry brings it back', async 
     server.close();
   }
 });
+
+// ---- screen wake lock --------------------------------------------------------------
+
+test('the screen is kept awake on Scan and Solve, not on Verify, and re-taken after hiding', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext({ reducedMotion: 'reduce' });
+    // A stand-in wake lock that counts what is held, and can be "released by the
+    // browser" (as when the tab is hidden).
+    await context.addInitScript(() => {
+      const held = new Set();
+      window.__wake = { held: () => held.size, browserRelease: () => [...held].forEach((l) => l.release()) };
+      const wakeLock = {
+        request: async () => {
+          const lock = new EventTarget();
+          lock.release = async () => {
+            if (!held.delete(lock)) return;
+            lock.dispatchEvent(new Event('release'));
+          };
+          held.add(lock);
+          return lock;
+        },
+      };
+      Object.defineProperty(navigator, 'wakeLock', { value: wakeLock, configurable: true });
+    });
+    const page = await context.newPage();
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+    const held = () => page.evaluate(() => window.__wake.held());
+
+    await page.waitForFunction(() => window.__wake.held() === 1);
+    await page.click('#btn-manual');
+    await page.waitForFunction(() => window.__wake.held() === 0);
+    await page.evaluate((f) => window.__solvent.setFaces(f), scrambledFaces(['R', 'U']));
+    await page.click('#btn-solve');
+    await page.waitForFunction(() => window.__wake.held() === 1);
+
+    // The browser lets it go (tab hidden); coming back takes it again — once.
+    await page.evaluate(() => window.__wake.browserRelease());
+    assert.equal(await held(), 0);
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await page.waitForFunction(() => window.__wake.held() === 1);
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await page.waitForTimeout(100);
+    assert.equal(await held(), 1, 'never more than one lock');
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

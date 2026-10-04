@@ -246,6 +246,40 @@ export function initApp() {
     newCube();
   }
 
+  // ---- keep the screen awake ------------------------------------------------
+  // Scanning and stepping through a solution both happen with hands on the cube,
+  // not the phone; a screen that dims or locks mid-solve costs the grip and the
+  // place. Held on Scan and Solve, let go on Verify (taps keep it awake there,
+  // and a forgotten Verify screen shouldn't burn battery). The browser drops the
+  // lock whenever the tab is hidden, so it is taken again on return. Unsupported
+  // or refused: skipped silently — nothing depends on it.
+  let wakeLock = null;
+  let wakeWanted = false;
+  let wakeRequest = null;
+  function holdAwake(on) {
+    wakeWanted = on;
+    if (!on) {
+      const lock = wakeLock;
+      wakeLock = null;
+      if (lock) lock.release().catch(() => {});
+      return;
+    }
+    if (wakeLock || wakeRequest || !navigator.wakeLock || document.hidden) return;
+    wakeRequest = navigator.wakeLock
+      .request('screen')
+      .then((lock) => {
+        if (!wakeWanted) return lock.release().catch(() => {});
+        wakeLock = lock;
+        lock.addEventListener('release', () => {
+          if (wakeLock === lock) wakeLock = null;
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        wakeRequest = null;
+      });
+  }
+
   // ---- screens ----
   const screens = {
     capture: $('#screen-capture'),
@@ -287,6 +321,7 @@ export function initApp() {
     }
     // Solution auto-play must never keep running off-screen.
     if (name !== 'solution') stopPlay();
+    holdAwake(name !== 'review');
   }
 
   // ---- reticle ----
@@ -1215,6 +1250,7 @@ export function initApp() {
       return;
     }
     if (autoOn) startAuto();
+    if (wakeWanted) holdAwake(true); // the browser let it go while hidden
     // Back in the foreground on Scan with the camera gone (phones end it in the
     // background): bring it back without making the user hunt for Retry.
     if (screens.capture.classList.contains('is-active') && (cameraProblem === 'stopped' || (scanner && !scanner.isActive()))) {
