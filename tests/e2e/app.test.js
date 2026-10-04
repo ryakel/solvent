@@ -919,3 +919,45 @@ test('Verify offers a one-tap fix for a face read turned, with Undo', async () =
     server.close();
   }
 });
+
+test('the solution cube shows the move being waited on — layer and direction', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext({ reducedMotion: 'reduce' });
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+    await page.evaluate((f) => {
+      window.__solvent.goReview();
+      window.__solvent.setFaces(f);
+    }, scrambledFaces(['R', "U'", 'F2', 'R']));
+    await page.click('#btn-solve');
+    await page.waitForSelector('#screen-solution.is-active');
+
+    const { moves } = await page.evaluate(() => window.__solvent.getState());
+    const expect = (name) => {
+      const t = size2x2.moveToTurn(name);
+      return { axis: t.axis, sign: t.sign, quarters: t.quarters };
+    };
+    const shown = () => page.evaluate(() => window.__solvent.turnShown());
+    assert.deepEqual(await shown(), expect(moves[0]), 'move 1 is shown before it is played');
+    await page.click('#btn-next');
+    await page.waitForFunction(() => window.__solvent.getState().stepIndex === 1);
+    assert.deepEqual(await shown(), expect(moves[1]), 'then move 2');
+    await page.click(`#move-list li:nth-child(${moves.length})`);
+    await page.waitForFunction((n) => window.__solvent.getState().stepIndex === n, moves.length);
+    assert.equal(await shown(), null, 'nothing to show once solved');
+    await page.click('#btn-prev');
+    await page.waitForFunction((n) => window.__solvent.getState().stepIndex === n, moves.length - 1);
+    assert.deepEqual(await shown(), expect(moves[moves.length - 1]), 'Prev brings the last move back');
+
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

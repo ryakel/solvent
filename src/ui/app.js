@@ -1507,6 +1507,10 @@ export function initApp() {
     }
   }
   function updateSolveReadout() {
+    // The 3D cube shows the move being waited on: which layer, which way.
+    if (renderer) {
+      renderer.showTurn(stepIndex < solution.moves.length ? mod.current.moveToTurn(solution.moves[stepIndex].name) : null);
+    }
     $('#move-counter').textContent = `Move ${stepIndex} / ${solution.moves.length}`;
     const hint = $('#move-hint');
     if (solution.moves.length === 0) {
@@ -1751,6 +1755,8 @@ export function initApp() {
     // Auto-play state, so the e2e can click Play and assert it reaches solved
     // then stops on its own.
     isPlaying: () => playing,
+    // The move the solution cube is currently pointing at, if any.
+    turnShown: () => (renderer ? renderer.turnShown() : null),
     // Everything that belongs to the current cube, so the e2e can prove a New
     // cube starts from nothing.
     snapshot: () => ({
