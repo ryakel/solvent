@@ -1,8 +1,9 @@
 // scanner.js — camera capture that samples an N x N grid of sticker colors.
 //
 // Size-agnostic: the grid dimension is a parameter, not hard-coded to 2x2. If the
-// camera is unavailable or denied, start() returns false and the app falls back
-// to manual color entry — the rest of the flow is identical.
+// camera is unavailable or denied, start() returns false, failureReason() says
+// why (so the app can say what to do), and manual color entry still works — the
+// rest of the flow is identical.
 
 export function createScanner({ video, gridN }) {
   // Mutable so a cube-size switch re-targets a live camera without restarting it.
@@ -10,11 +11,18 @@ export function createScanner({ video, gridN }) {
   let stream = null;
   let track = null;
   let torchOn = false;
+  // Why the last start() failed: 'insecure' | 'denied' | 'notfound' | 'busy' | 'other'.
+  let failure = null;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
   async function start() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+    failure = null;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      // Browsers withhold the camera API entirely from non-https pages.
+      failure = window.isSecureContext === false ? 'insecure' : 'other';
+      return false;
+    }
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
@@ -31,7 +39,28 @@ export function createScanner({ video, gridN }) {
     } catch (err) {
       stream = null;
       track = null;
+      failure = reasonFor(err);
       return false;
+    }
+  }
+
+  // getUserMedia's error names, mapped to what the user can do about each.
+  function reasonFor(err) {
+    switch (err && err.name) {
+      case 'NotAllowedError':
+      case 'PermissionDeniedError':
+      case 'SecurityError':
+        return 'denied';
+      case 'NotFoundError':
+      case 'DevicesNotFoundError':
+      case 'OverconstrainedError':
+        return 'notfound';
+      case 'NotReadableError':
+      case 'TrackStartError':
+      case 'AbortError':
+        return 'busy';
+      default:
+        return 'other';
     }
   }
 
@@ -151,8 +180,10 @@ export function createScanner({ video, gridN }) {
     return out;
   }
 
+  // Live means a track that is still delivering frames — not merely a stream
+  // object that once existed. A backgrounded phone or another app can end it.
   function isActive() {
-    return !!stream;
+    return !!stream && !!track && track.readyState === 'live';
   }
 
   // The active camera's facing mode: 'user' (front / selfie — its preview reads
@@ -171,5 +202,16 @@ export function createScanner({ video, gridN }) {
     grid = n;
   }
 
-  return { start, stop, sample, setGridN, isActive, hasTorch, setTorch, isTorchOn, facingMode };
+  return {
+    start,
+    stop,
+    sample,
+    setGridN,
+    isActive,
+    failureReason: () => failure,
+    hasTorch,
+    setTorch,
+    isTorchOn,
+    facingMode,
+  };
 }

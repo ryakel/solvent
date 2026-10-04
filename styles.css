@@ -287,6 +287,43 @@ h1 {
   22% { opacity: 1; transform: scale(1); }
   100% { opacity: 0; transform: scale(1); }
 }
+/* Turn cue over the preview: one bold arrow sweeping the way the cube should
+   turn next, twice, then held briefly. A dark under-stroke keeps it legible on
+   any sticker colour. Static under reduced motion. */
+.turn-cue {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  color: var(--ink);
+  overflow: visible;
+}
+.turn-cue path[data-line] {
+  fill: none;
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: turn-cue-sweep 1.1s ease-in-out 2 forwards;
+}
+.turn-cue__under { stroke: rgba(5, 7, 10, 0.55); stroke-width: 6.5; }
+.turn-cue__line { stroke: currentColor; stroke-width: 3.2; }
+.turn-cue__label {
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 700;
+  fill: currentColor;
+  paint-order: stroke;
+  stroke: rgba(5, 7, 10, 0.7);
+  stroke-width: 1.6px;
+}
+@keyframes turn-cue-sweep {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-cue path[data-line] { animation: none; stroke-dashoffset: 0; }
+}
 /* Mirror for a front / selfie camera: the raw preview reads reversed, so flip it
    to feel natural; the guide + wording flip in lockstep (see app.js). */
 .camera-wrap.is-mirrored #video { transform: scaleX(-1); }
@@ -388,6 +425,8 @@ h1 {
   font-size: 14px;
   background: rgba(5, 7, 10, 0.85);
 }
+.camera-msg__box { max-width: 34ch; display: grid; gap: 12px; justify-items: center; }
+.camera-msg__box p { margin: 0; line-height: 1.5; }
 
 .capture-side { display: flex; flex-direction: column; gap: 16px; }
 /* The turn-guide card: an animated demonstration of the exact whole-cube turn
@@ -589,6 +628,19 @@ h1 {
 
 .fineprint { font-size: 12.5px; color: var(--ink-faint); margin: 0; }
 
+/* Capture-time check: the face just captured doesn't fit with the ones before
+   it. Amber, like the low-confidence recheck — "look again", not a hard error. */
+.capture-warning {
+  border: 1px solid rgba(245, 197, 24, 0.45);
+  border-left: 3px solid var(--c-yellow);
+  background: rgba(245, 197, 24, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.capture-warning__text { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink); font-weight: 600; }
+.capture-warning__hint { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-dim); }
+.capture-warning__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
 /* ---------- review / net ---------- */
 .palette {
   display: flex;
@@ -629,7 +681,29 @@ h1 {
 .net-face[data-face="R"] { grid-column: 3; grid-row: 2; }
 .net-face[data-face="B"] { grid-column: 4; grid-row: 2; }
 .net-face[data-face="D"] { grid-column: 2; grid-row: 3; }
-.net-face__label { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px; }
+/* Label and Rescan share a row where they fit, and stack on narrow phones. */
+.net-face__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 6px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+.net-face__label { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); }
+.net-face__rescan {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.net-face__rescan:hover { color: var(--ink); border-color: var(--ink-faint); }
 .sticker-grid { display: grid; gap: 5px; }
 .sticker {
   aspect-ratio: 1;
@@ -654,6 +728,51 @@ h1 {
   0%, 100% { box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px rgba(245, 197, 24, 0.5); }
   50%      { box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px rgba(245, 197, 24, 1); }
 }
+
+/* A sticker a validation finding is about: a red ring, the "fix this"
+   counterpart to the amber recheck ring (and it wins over it). The finding being
+   pointed at or tapped rings its stickers harder. */
+.sticker[data-fix="true"] {
+  animation: none;
+  box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px var(--c-red);
+}
+.sticker[data-fix="focus"] {
+  animation: none;
+  box-shadow: 0 0 0 1px var(--slate), 0 0 0 4px var(--c-red), 0 0 14px rgba(229, 72, 77, 0.65);
+  transform: scale(1.06);
+}
+.validation__hint { margin: 0 0 8px; font-size: 13px; color: var(--ink-dim); }
+/* Auto-repair offer: the one slip that explains the errors, as a single tap. */
+.validation__repair {
+  margin-top: 12px;
+  border: 1px solid rgba(43, 127, 255, 0.45);
+  border-left: 3px solid var(--c-blue);
+  background: rgba(43, 127, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.validation__repair p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: var(--ink); }
+.validation__ok .btn { margin-left: 12px; padding: 6px 12px; font-size: 13px; }
+.validation__errs li[data-cells] { cursor: pointer; }
+.validation__errs li[data-cells]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Something unexpected threw: a calm notice pinned to the bottom of the view. */
+.oops {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 32px));
+  z-index: 50;
+  background: var(--slate-2);
+  border: 1px solid var(--line-2);
+  border-left: 3px solid var(--c-red);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+.oops__text { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: var(--ink); }
+.oops__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* Verify-screen uncertainty summary. Amber-keyed and clearly not the red error
    box — a "look here," paired with the on-net highlights. */
@@ -747,6 +866,15 @@ h1 {
   font-weight: 600;
   color: var(--ink);
 }
+.setup-face {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.setup-face .scan-readback__grid i { width: 18px; height: 18px; }
 .setup-chip .face-dot {
   width: 16px;
   height: 16px;
@@ -835,6 +963,8 @@ h1 {
     margin-inline: auto;
   }
   .capture-actions--primary { order: -1; margin-inline: auto; width: min(100%, 46vh); }
+  /* Keep a capture warning right under the button it answers. */
+  .capture-warning { order: -1; }
   /* Tighten the header block so more of the viewport is the live preview. */
   .screen__head { margin-bottom: 14px; }
 }

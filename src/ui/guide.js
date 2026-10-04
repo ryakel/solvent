@@ -16,6 +16,10 @@
 //     "keep going" cue than a static half-circle.
 //   • setMirror() reflects the whole demonstration left-for-right to match a
 //     mirrored (selfie) camera preview, so guide and preview always agree.
+//   • setColors() paints the demo cube as THE USER'S cube: stickers scanned so
+//     far in their real colours, the rest a neutral "not scanned yet" grey. The
+//     face just scanned visibly swings away and a grey face swings in — the
+//     user's own turn, not a solved cube's.
 //
 // Honors prefers-reduced-motion by snapping to the target pose with a static
 // arrow instead of looping the demonstration.
@@ -89,6 +93,16 @@ export function createGuide(container, opts) {
     side: THREE.DoubleSide,
   });
   const stickerMat = {};
+  // A sticker not scanned yet: flat, dark and quiet, so the scanned colours lead.
+  const matUnscanned = new THREE.MeshStandardMaterial({
+    color: 0x2b323c,
+    roughness: 0.7,
+    side: THREE.DoubleSide,
+  });
+  // Every sticker tile by `pos|normal` in the cube's own frame (the frame of the
+  // first scan), so setColors() can repaint any geometry onto it.
+  const tiles = new Map();
+  const tileKey = (pos, normal) => pos.join(',') + '|' + normal.join(',');
   const mat = (c) =>
     (stickerMat[c] ||= new THREE.MeshStandardMaterial({
       color: new THREE.Color(colorHex[c]),
@@ -106,9 +120,29 @@ export function createGuide(container, opts) {
       tile.position.set(s.normal[0] * d, s.normal[1] * d, s.normal[2] * d);
       tile.lookAt(tile.position.clone().multiplyScalar(2));
       g.add(tile);
+      tiles.set(tileKey(c.pos, s.normal), { tile, color: s.color });
     }
     g.position.set(c.pos[0] * posScale, c.pos[1] * posScale, c.pos[2] * posScale);
     cube.add(g);
+  }
+
+  // Repaint the demo cube from a geometry in the first scan's frame; a sticker
+  // whose colour is null/undefined shows as not scanned yet.
+  function setColors(geom) {
+    for (const c of geom) {
+      for (const s of c.stickers) {
+        const entry = tiles.get(tileKey(c.pos, s.normal));
+        if (!entry) continue;
+        entry.color = s.color || null;
+        entry.tile.material = entry.color ? mat(entry.color) : matUnscanned;
+      }
+    }
+  }
+  // What each sticker currently shows ({ 'pos|normal': colour | null }) — for tests.
+  function shownColors() {
+    const out = {};
+    for (const [k, v] of tiles) out[k] = v.color;
+    return out;
   }
 
   // ---- turn indicators: curved arrow + rotation axis, flat and engineered ----
@@ -322,12 +356,16 @@ export function createGuide(container, opts) {
     }
   }
 
-  function showStep(i) {
+  // `still`: show the step's face presented, gently swaying, without demonstrating
+  // the turn into it — for a rescan, where the user holds that face any way round.
+  let still = false;
+  function showStep(i, opts = {}) {
     stepIndex = Math.max(0, Math.min(Math.max(0, SEQ.length - 1), i | 0));
+    still = !!opts.still;
     cycleStart = null; // restart the demonstration for the new step
     curPhase = null;
     const step = SEQ[stepIndex];
-    setIndicator(step ? step.turn : null);
+    setIndicator(step && !still ? step.turn : null);
     if (STEP_Q[stepIndex]) cube.quaternion.copy(STEP_Q[stepIndex]);
     if (reducedMotion) {
       matInk.opacity = 0.9;
@@ -353,7 +391,7 @@ export function createGuide(container, opts) {
       if (STEP_Q[stepIndex]) cube.quaternion.copy(STEP_Q[stepIndex]);
       inkTarget = 0.9;
       if (active) renderIndicator(active, 'hold', 1);
-    } else if (!step || !step.turn) {
+    } else if (!step || !step.turn || still) {
       // Starting hold: a slow, instrument-steady sway so the pose reads as 3D.
       swayA.setFromAxisAngle(Y, Math.sin(now / 1900) * 0.05);
       swayB.setFromAxisAngle(X, Math.sin(now / 2700 + 1) * 0.03);
@@ -434,5 +472,5 @@ export function createGuide(container, opts) {
     }
   }
 
-  return { showStep, setSequence, setMirror, start, stop, resize, dispose };
+  return { showStep, setSequence, setMirror, setColors, shownColors, start, stop, resize, dispose };
 }

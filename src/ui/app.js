@@ -6,13 +6,15 @@ import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
 import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
-import { stateFromGeom, isSolved } from '../core/cube2.js';
+import { findRepair, applyRepair, rotateGrid } from '../sizes/repair.js';
+import { calibrateLabels } from '../core/calibrate.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 // Show/hide by the `hidden` ATTRIBUTE. `el.hidden = …` only works on HTML
 // elements: on an <svg> it just sets a plain JS property and the attribute (and
 // so the element's visibility) never changes.
 const setHidden = (node, hide) => node.toggleAttribute('hidden', hide);
+const isHidden = (node) => node.hasAttribute('hidden');
 const el = (tag, cls, txt) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -21,16 +23,65 @@ const el = (tag, cls, txt) => {
 };
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Solved means six solid faces, whichever way up the cube is held — any size.
+function sixSolidFaces(geom) {
+  const byFace = new Map();
+  for (const c of geom) {
+    for (const s of c.stickers) {
+      const k = s.normal.join(',');
+      if (!byFace.has(k)) byFace.set(k, new Set());
+      byFace.get(k).add(s.color);
+    }
+  }
+  return byFace.size === 6 && [...byFace.values()].every((set) => set.size === 1);
+}
 // Solution turn duration. Kept deliberately unhurried so each move reads clearly.
 const ANIM_MS = REDUCED_MOTION ? 0 : 720;
 
 export function initApp() {
+  // ---- unexpected errors ------------------------------------------------------
+  // Anything that throws used to just stop: a button that does nothing, a step
+  // that won't advance, no hint why. Say so plainly instead — the cube entered so
+  // far is untouched — with the details one tap away for a bug report. Wired
+  // first so it covers everything below.
+  let oopsDetails = '';
+  function showOops(err) {
+    const message = (err && err.message) || String(err || 'Unknown error');
+    // Chrome reports this harmless ResizeObserver notice as an error event.
+    if (/ResizeObserver loop/.test(message)) return;
+    oopsDetails = `${message}\n\n${(err && err.stack) || '(no stack)'}\n\n${navigator.userAgent}`;
+    document.querySelector('#oops-text').textContent =
+      `Something went wrong (${message}). Your cube is still here — try that again, or tap New cube to start over.`;
+    document.querySelector('#btn-oops-copy').textContent = 'Copy details';
+    document.querySelector('#oops').hidden = false;
+  }
+  window.addEventListener('error', (e) => showOops(e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => showOops(e.reason));
+  document.querySelector('#btn-oops-dismiss').addEventListener('click', () => {
+    document.querySelector('#oops').hidden = true;
+  });
+  document.querySelector('#btn-oops-copy').addEventListener('click', async () => {
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(oopsDetails);
+      ok = true;
+    } catch {
+      ok = fallbackCopy(oopsDetails);
+    }
+    document.querySelector('#btn-oops-copy').textContent = ok ? 'Copied ✓' : 'Copy unavailable';
+  });
+
   const mod = { current: defaultSizeModule() };
   let faces = mod.current.emptyFaces();
   // Per-sticker "this scan read was ambiguous" flags, parallel to `faces`. Only
   // ever set on the camera path (manual entry has no confidence signal), reset
   // alongside faces, and cleared for a sticker the moment the user repaints it.
   let lowConf = emptyLowConf();
+  // The camera's raw [r,g,b] behind each sticker, parallel to `faces`; null where
+  // there's no sample (not scanned, or painted by hand — hand paint is ground
+  // truth). Lets Verify re-read colours against the cube's own stickers.
+  let rawRgb = emptyRaw();
   let paintColor = mod.current.colors[0];
   let captureIndex = 0;
   let scanner = null;
@@ -39,6 +90,11 @@ export function initApp() {
   let solution = null;
   let stepIndex = 0;
   let animating = false;
+  // The turn currently animating (a real, time-taking promise), so anything that
+  // must wait for it — a jump across the move list — awaits it instead of spinning.
+  let inFlight = Promise.resolve();
+  // Bumped by every jump and by Play: only the latest jump keeps stepping.
+  let jumpSeq = 0;
   // Solution auto-play: advances through the moves on a timer, but STRICTLY by
   // awaiting goNext() each step (never a raw timer that could overlap the
   // `animating` guard). `playDelayTimer` is the only bare timeout — the cancelable
@@ -119,6 +175,9 @@ export function initApp() {
       if (kind === 'complete') {
         tick(660, t0, 0.12, 0.05);
         tick(990, t0 + 0.1, 0.16, 0.05); // resolves up — "done"
+      } else if (kind === 'warn') {
+        tick(392, t0, 0.12, 0.05);
+        tick(294, t0 + 0.12, 0.18, 0.05); // falls — "look again"
       } else {
         tick(760, t0, 0.09, 0.045);
       }
@@ -132,6 +191,9 @@ export function initApp() {
     if (kind === 'complete') {
       haptic([16, 60, 28]); // set complete — a distinct double tick
       blip('complete');
+    } else if (kind === 'warn') {
+      haptic([40, 70, 40]); // the face doesn't fit — two firm pulses
+      blip('warn');
     } else {
       haptic(14); // one face locked in — a single crisp tick
       blip('tick');
@@ -174,6 +236,12 @@ export function initApp() {
   // A face flagged "uncertain" is one that was scanned (filled) and holds at
   // least one low-confidence sticker. Skipped / empty faces are never flagged —
   // they are merely incomplete, handled by the fill-in path.
+  function emptyRaw() {
+    const f = {};
+    const n = mod.current.gridN * mod.current.gridN;
+    for (const face of mod.current.faceOrder) f[face] = new Array(n).fill(null);
+    return f;
+  }
   function emptyLowConf() {
     const f = {};
     const n = mod.current.gridN * mod.current.gridN;
@@ -221,6 +289,40 @@ export function initApp() {
     newCube();
   }
 
+  // ---- keep the screen awake ------------------------------------------------
+  // Scanning and stepping through a solution both happen with hands on the cube,
+  // not the phone; a screen that dims or locks mid-solve costs the grip and the
+  // place. Held on Scan and Solve, let go on Verify (taps keep it awake there,
+  // and a forgotten Verify screen shouldn't burn battery). The browser drops the
+  // lock whenever the tab is hidden, so it is taken again on return. Unsupported
+  // or refused: skipped silently — nothing depends on it.
+  let wakeLock = null;
+  let wakeWanted = false;
+  let wakeRequest = null;
+  function holdAwake(on) {
+    wakeWanted = on;
+    if (!on) {
+      const lock = wakeLock;
+      wakeLock = null;
+      if (lock) lock.release().catch(() => {});
+      return;
+    }
+    if (wakeLock || wakeRequest || !navigator.wakeLock || document.hidden) return;
+    wakeRequest = navigator.wakeLock
+      .request('screen')
+      .then((lock) => {
+        if (!wakeWanted) return lock.release().catch(() => {});
+        wakeLock = lock;
+        lock.addEventListener('release', () => {
+          if (wakeLock === lock) wakeLock = null;
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        wakeRequest = null;
+      });
+  }
+
   // ---- screens ----
   const screens = {
     capture: $('#screen-capture'),
@@ -245,8 +347,9 @@ export function initApp() {
     if (name === 'review') refreshNet(), validateNow();
     if (guide) {
       if (name === 'capture') {
+        refreshGuideColors(); // stickers may have been repainted at Verify
         guide.start();
-        guide.showStep(captureIndex);
+        guide.showStep(captureIndex, { still: !!rescanning });
       } else {
         guide.stop();
       }
@@ -261,6 +364,7 @@ export function initApp() {
     }
     // Solution auto-play must never keep running off-screen.
     if (name !== 'solution') stopPlay();
+    holdAwake(name !== 'review');
   }
 
   // ---- reticle ----
@@ -302,7 +406,38 @@ export function initApp() {
       chip.dataset.low = 'false';
     });
   }
+  // Where camera cell i is DRAWN. With Mirror on, the preview is flipped left-for-
+  // right, so whatever is drawn over it or beside it (live dots, read-back) must
+  // flip too. Only the drawing moves: samples and stored stickers stay in the
+  // camera's true frame, which is what the cube really looks like.
+  function shownAt(i) {
+    if (!mirror) return i;
+    const n = mod.current.gridN;
+    return Math.floor(i / n) * n + (n - 1 - (i % n));
+  }
+  // Motion signal for the capture check (sizes/capturecheck.js): the camera-order
+  // colours at the last capture, and whether the live read-out has seen the
+  // picture change since. Turning a cube always sweeps other colours through the
+  // reticle, so a capture with no change since the previous one means the cube
+  // wasn't turned. Stickers alone can't say so: two faces of a real 2x2 can look
+  // identical.
+  let lastCaptureView = null;
+  let viewChanged = false;
+  function noteLiveView(view) {
+    if (!lastCaptureView || viewChanged) return;
+    let diff = 0;
+    view.forEach((c, i) => {
+      if (c !== lastCaptureView[i]) diff++;
+    });
+    if (diff >= Math.max(1, Math.ceil(view.length / 4))) viewChanged = true;
+  }
   function liveTick() {
+    // A camera that was live and no longer is (backgrounded phone, another app):
+    // say so instead of sampling a frozen frame.
+    if (scanner && !scanner.isActive() && screens.capture.classList.contains('is-active') && !cameraStarting) {
+      cameraLost();
+      return;
+    }
     if (!liveActive()) return;
     let samples;
     try {
@@ -314,9 +449,9 @@ export function initApp() {
     const chips = $('#reticle').querySelectorAll('.reticle-chip');
     const detailed = typeof mod.current.classifyColorDetailed === 'function';
     const thr = mod.current.confidenceThreshold ?? 0.2;
+    const view = [];
     samples.forEach((rgb, i) => {
-      const chip = chips[i];
-      if (!chip) return;
+      const chip = chips[shownAt(i)];
       let color, low;
       if (detailed) {
         const d = mod.current.classifyColorDetailed(rgb);
@@ -326,13 +461,18 @@ export function initApp() {
         color = mod.current.classifyColor(rgb);
         low = false;
       }
+      view.push(color);
+      if (!chip) return;
       chip.style.background = mod.current.colorHex[color];
       chip.dataset.low = low ? 'true' : 'false';
     });
+    noteLiveView(view);
     $('#reticle').classList.add('live');
   }
   function startLive() {
     if (liveTimer || !liveActive()) return;
+    // (The tick also watches for the camera dropping, so it runs whenever a live
+    // camera is on the Scan screen.)
     $('#camera-wrap').classList.add('is-live');
     liveTimer = setInterval(liveTick, LIVE_SAMPLE_MS);
     liveTick();
@@ -363,7 +503,10 @@ export function initApp() {
       flag.setAttribute('aria-hidden', 'true');
       chip.appendChild(flag);
       chip.addEventListener('click', () => {
+        endRescan();
         captureIndex = i;
+        hideCaptureWarning();
+        hideTurnCue();
         updateCaptureTarget();
       });
       wrap.appendChild(chip);
@@ -399,14 +542,64 @@ export function initApp() {
       mirror,
       centers: mod.current.hasCenters,
     });
-    $('#capture-step').textContent = `STEP ${captureIndex + 1}/${seq.length}`;
-    $('#capture-turn').textContent = label;
+    const again = rescanning === f;
+    $('#capture-step').textContent = again ? 'RESCAN' : `STEP ${captureIndex + 1}/${seq.length}`;
+    $('#capture-turn').textContent = again ? 'ANY WAY ROUND' : label;
     $('#capture-face-name').textContent = mod.current.faceLabels[f];
     $('#capture-face-swatch').style.background = mod.current.colorHex[mod.current.faceColor[f]];
-    $('#capture-face-hint').textContent = text;
+    $('#capture-face-hint').textContent = again
+      ? `Hold the ${mod.current.faceLabels[f].toLowerCase()} face toward the camera — any way round. Solvent lines it up with the rest of the cube, then takes you back to Verify.`
+      : text;
     renderReadback(f);
-    if (guide) guide.showStep(captureIndex);
+    refreshGuideColors();
+    if (guide) guide.showStep(captureIndex, { still: again });
     refreshFaceProgress();
+  }
+
+  // ---- rescan one face from Verify ----------------------------------------------
+  // The grip from the scan sequence is long gone by Verify, so a rescanned face
+  // can arrive any way round. Of its four rotations, keep the one that makes the
+  // whole cube real if exactly one does; else the one closest to the old read;
+  // else as the camera saw it. Then straight back to Verify.
+  let rescanning = null; // the face being rescanned, or null
+  let rescanOld = null; // that face's previous read, for lining the new one up
+  function rescanFace(f) {
+    rescanning = f;
+    rescanOld = faces[f].slice();
+    captureIndex = scanFaces().indexOf(f);
+    lastCaptureView = null; // no "picture hasn't changed" across screens
+    viewChanged = false;
+    hideCaptureWarning();
+    showScreen('capture');
+    updateCaptureTarget();
+    ensureCamera();
+  }
+  function rescanTurn(f, read) {
+    const n = mod.current.gridN;
+    const options = [0, 1, 2, 3].map((k) => rotateGrid(read, n, k));
+    const real = [0, 1, 2, 3].filter((k) => mod.current.validate({ ...faces, [f]: options[k] }).ok);
+    if (real.length === 1) return real[0];
+    const pool = real.length ? real : [0, 1, 2, 3];
+    if (!rescanOld || rescanOld.some((c) => c == null)) return pool[0];
+    let best = pool[0];
+    let bestScore = -1;
+    for (const k of pool) {
+      const score = options[k].filter((c, i) => c === rescanOld[i]).length;
+      if (score > bestScore) {
+        best = k;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+  function endRescan() {
+    rescanning = null;
+    rescanOld = null;
+  }
+  function finishRescan() {
+    endRescan();
+    confirmFeedback('tick');
+    goReview();
   }
 
   // Immediate per-face feedback: the moment a face is scanned, mirror the colors
@@ -433,8 +626,64 @@ export function initApp() {
     const step = scanSeq().find((s) => s.face === f);
     const seen = faceToCamera(step && step.cameraToFacelet, faces[f]);
     [...grid.children].forEach((cell, i) => {
-      cell.style.background = mod.current.colorHex[seen[i]] || 'transparent';
+      cell.style.background = mod.current.colorHex[seen[shownAt(i)]] || 'transparent';
     });
+  }
+
+  // The guide shows THIS cube: stickers scanned so far in their real colours,
+  // the rest "not scanned yet". A 3x3's unscanned centres show the colours the
+  // start instruction names (White top, Green front) — that is the grip asked for.
+  function refreshGuideColors() {
+    if (!guide || typeof mod.current.facesToGeom !== 'function') return;
+    const shown = {};
+    for (const f of mod.current.faceOrder) {
+      shown[f] = faces[f].slice();
+      if (mod.current.hasCenters) {
+        const c = Math.floor(shown[f].length / 2);
+        if (shown[f][c] == null) shown[f][c] = mod.current.solvedFaces[f][c];
+      }
+    }
+    guide.setColors(mod.current.facesToGeom(shown));
+  }
+
+  // ---- turn cue over the preview ----------------------------------------------
+  // Right after a capture moves on, the next turn sweeps across the camera
+  // preview, where the user is looking. Mirrored with the preview.
+  const CUE_PATHS = {
+    left: 'M 74 34 C 62 18, 38 18, 26 34',
+    right: 'M 26 34 C 38 18, 62 18, 74 34',
+    down: 'M 64 22 C 79 37, 79 63, 64 78',
+    up: 'M 64 78 C 79 63, 79 37, 64 22',
+    flip: 'M 62 16 C 88 32, 88 68, 62 84',
+  };
+  let cueTimer = 0;
+  function cueKind(turn) {
+    if (!turn) return null;
+    if (turn.axis === 'y') {
+      let left = turn.deg < 0;
+      if (mirror) left = !left;
+      return left ? 'left' : 'right';
+    }
+    if (Math.abs(turn.deg) >= 180) return 'flip';
+    return turn.deg > 0 ? 'down' : 'up';
+  }
+  function showTurnCue() {
+    const svg = $('#turn-cue');
+    const kind = svg && cueKind(scanSeq()[captureIndex].turn);
+    if (!kind) return hideTurnCue();
+    svg.dataset.turn = kind;
+    for (const p of svg.querySelectorAll('path[data-line]')) p.setAttribute('d', CUE_PATHS[kind]);
+    svg.querySelector('.turn-cue__label').textContent = kind === 'flip' ? '180°' : '';
+    setHidden(svg, true); // re-showing restarts the sweep
+    void svg.getBoundingClientRect();
+    setHidden(svg, false);
+    clearTimeout(cueTimer);
+    cueTimer = setTimeout(hideTurnCue, 2600);
+  }
+  function hideTurnCue() {
+    clearTimeout(cueTimer);
+    const svg = $('#turn-cue');
+    if (svg) setHidden(svg, true);
   }
 
   // The animated guide cube demonstrates how to turn the cube to show each face.
@@ -451,6 +700,7 @@ export function initApp() {
         onArrive: pulseArrival,
       });
       guide.setMirror(mirror);
+      refreshGuideColors();
       if (screens.capture.classList.contains('is-active')) guide.start();
     } catch (err) {
       guide = null; // WebGL unavailable: text guidance still covers it.
@@ -488,6 +738,7 @@ export function initApp() {
     }
     if (guide) guide.setMirror(mirror);
     updateCaptureTarget();
+    if (!isHidden($('#turn-cue'))) showTurnCue();
   }
 
   // The selfie-camera nudge (see mirrorNudgeSpent). Shown at most once, and never
@@ -532,14 +783,26 @@ export function initApp() {
     for (const f of mod.current.faceOrder) {
       const face = el('div', 'net-face');
       face.dataset.face = f;
-      face.appendChild(el('div', 'net-face__label', `${f} · ${mod.current.faceLabels[f]}`));
+      const head = el('div', 'net-face__head');
+      head.appendChild(el('div', 'net-face__label', `${f} · ${mod.current.faceLabels[f]}`));
+      const rescan = el('button', 'net-face__rescan', 'Rescan');
+      rescan.type = 'button';
+      rescan.dataset.face = f;
+      rescan.setAttribute('aria-label', `Rescan the ${mod.current.faceLabels[f]} face with the camera`);
+      rescan.addEventListener('click', () => rescanFace(f));
+      head.appendChild(rescan);
+      face.appendChild(head);
       const grid = el('div', 'sticker-grid');
       grid.style.gridTemplateColumns = `repeat(${mod.current.gridN}, 1fr)`;
       for (let i = 0; i < mod.current.gridN * mod.current.gridN; i++) {
         const st = el('button', 'sticker');
+        st.dataset.cell = `${f}:${i}`;
         markSticker(st, f, i);
         st.addEventListener('click', () => {
+          if (faces[f][i] === paintColor) return; // no change, nothing to undo
+          remember('paint');
           faces[f][i] = paintColor;
+          if (rawRgb[f]) rawRgb[f][i] = null; // hand paint is ground truth
           // The user just verified this sticker by hand — clear its "recheck"
           // flag so the highlight and the summary count stay honest.
           if (lowConf[f]) lowConf[f][i] = false;
@@ -606,11 +869,126 @@ export function initApp() {
       `${n} face${n > 1 ? 's' : ''} look${n > 1 ? '' : 's'} uncertain — the flagged ` +
       `stickers are highlighted below. Tap any to confirm or repaint it.`;
   }
+  // Mark the stickers the current findings are about: a red ring on every one,
+  // and a stronger one on the finding being hovered, focused or tapped. The
+  // user fixes stickers, not "the URF corner" — so point at the stickers.
+  function markFixes(issues, focus = null) {
+    const all = new Set();
+    for (const it of issues) for (const [f, i] of it.cells || []) all.add(`${f}:${i}`);
+    const focused = new Set((focus && focus.cells ? focus.cells : []).map(([f, i]) => `${f}:${i}`));
+    for (const st of $('#net').querySelectorAll('.sticker')) {
+      const k = st.dataset.cell;
+      st.dataset.fix = focused.has(k) ? 'focus' : all.has(k) ? 'true' : 'false';
+    }
+  }
+
+  // ---- auto-repair (sizes/repair.js) ------------------------------------------
+  // When the cube isn't real, look for the one slip that explains it — a face
+  // read turned, two faces swapped — and offer it as one tap, with Undo. Run just
+  // after validation (a few ms) and dropped if the stickers change meanwhile.
+  let repairToken = 0;
+  const copyFaces = (x) => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, v.slice()]));
+
+  // ---- Verify undo ---------------------------------------------------------------
+  // Every Verify edit — a sticker painted, Reset cube, an auto-fix or colour
+  // re-read — is undoable, newest first: stickers, their marks and their camera
+  // samples together. Per cube: New cube, a size switch or injected faces start
+  // it empty.
+  let undoStack = [];
+  function remember(kind) {
+    undoStack.push({ kind, faces: copyFaces(faces), lowConf: copyFaces(lowConf), rawRgb: copyFaces(rawRgb) });
+    if (undoStack.length > 200) undoStack.shift();
+  }
+  function undo() {
+    const last = undoStack.pop();
+    if (!last) return;
+    faces = last.faces;
+    lowConf = last.lowConf;
+    rawRgb = last.rawRgb;
+    refreshNet();
+    refreshFaceProgress();
+    validateNow();
+  }
+  $('#btn-undo').addEventListener('click', undo);
+  // Re-read every sticker against the cube's own colours (core/calibrate.js):
+  // offered only when that turns an impossible reading into a real cube. Not
+  // automatic — in simulation ~1 offer in 1,300 was a different real cube — so
+  // the changed stickers get the amber "check these" ring.
+  function colourReread() {
+    const order = mod.current.faceOrder;
+    const rgbs = [];
+    const labels = [];
+    const where = [];
+    for (const f of order) {
+      faces[f].forEach((c, i) => {
+        rgbs.push(rawRgb[f][i]);
+        labels.push(c);
+        where.push([f, i]);
+      });
+    }
+    if (rgbs.every((x) => !x)) return null; // entered by hand: nothing to re-read
+    const next = calibrateLabels({
+      rgbs,
+      labels,
+      colors: mod.current.colors,
+      perColor: mod.current.gridN * mod.current.gridN,
+      seedHex: mod.current.colorHex,
+    });
+    const changed = where.filter((_, k) => next[k] !== labels[k]);
+    if (!changed.length) return null;
+    const reread = copyFaces(faces);
+    where.forEach(([f, i], k) => (reread[f][i] = next[k]));
+    if (!mod.current.validate(reread).ok) return null;
+    const n = changed.length;
+    return {
+      faces: reread,
+      changed,
+      message:
+        `Re-reading the colors against your cube's own stickers makes this a real cube — ` +
+        `${n} sticker${n > 1 ? 's' : ''} change. They'll be ringed so you can check them against your cube.`,
+    };
+  }
+
+  function offerRepair() {
+    const token = repairToken;
+    setTimeout(() => {
+      if (token !== repairToken) return;
+      const reread = colourReread();
+      const r = reread ? null : findRepair(mod.current, faces);
+      if ((!reread && !r) || token !== repairToken) return;
+      const div = el('div', 'validation__repair');
+      div.appendChild(el('p', null, (reread || r).message));
+      const btn = el('button', 'btn btn--primary', reread ? 'Re-read colors' : 'Apply fix');
+      btn.type = 'button';
+      btn.id = 'btn-apply-repair';
+      btn.addEventListener('click', () => {
+        remember('fix');
+        if (reread) {
+          faces = reread.faces;
+          for (const [f, i] of reread.changed) lowConf[f][i] = true; // "check these"
+        } else {
+          faces = r.faces;
+          // Flags and samples travel with their stickers.
+          lowConf = applyRepair(lowConf, r, mod.current.gridN);
+          rawRgb = applyRepair(rawRgb, r, mod.current.gridN);
+        }
+        refreshNet();
+        refreshFaceProgress();
+        validateNow();
+      });
+      div.appendChild(btn);
+      $('#validation').appendChild(div);
+    }, 0);
+  }
+
   function validateNow() {
+    repairToken++; // any repair search for the previous stickers is stale
+    $('#btn-undo').disabled = undoStack.length === 0;
     updateUncertainNote();
     const box = $('#validation');
     const solveBtn = $('#btn-solve');
     if (!allFilled()) {
+      markFixes([]);
       box.innerHTML = '';
       const div = el('div', 'validation__errs');
       div.appendChild(el('h2', null, 'Fill in every sticker'));
@@ -622,23 +1000,53 @@ export function initApp() {
       solveBtn.disabled = true;
       return false;
     }
-    const { ok, errors, mirror, warning } = mod.current.validate(faces);
+    const { ok, errors, issues: found, mirror, warning } = mod.current.validate(faces);
+    const issues = found && found.length ? found : errors.map((message) => ({ message, cells: [] }));
+    markFixes(ok ? [] : issues);
     box.innerHTML = '';
     if (ok) {
       const div = el('div', 'validation__ok', 'This is a real, solvable cube. Ready to solve.');
       box.appendChild(div);
+      // The fix just applied made it real: offer its undo right on this line.
+      if (undoStack.length && undoStack[undoStack.length - 1].kind === 'fix') {
+        const undoFix = el('button', 'btn btn--ghost', 'Undo fix');
+        undoFix.type = 'button';
+        undoFix.id = 'btn-undo-repair';
+        undoFix.addEventListener('click', undo);
+        div.appendChild(undoFix);
+      }
       if (mirror && warning) {
         box.appendChild(el('div', 'validation__note', warning));
       }
       solveBtn.disabled = false;
     } else {
       const div = el('div', 'validation__errs');
-      div.appendChild(el('h2', null, `${errors.length} thing${errors.length > 1 ? 's' : ''} to fix`));
+      div.appendChild(el('h2', null, `${issues.length} thing${issues.length > 1 ? 's' : ''} to fix`));
+      if (issues.some((it) => it.cells && it.cells.length)) {
+        div.appendChild(
+          el('p', 'validation__hint', 'The stickers involved are ringed in red above — point at or tap a line to see its stickers.')
+        );
+      }
       const ul = el('ul');
-      for (const e of errors) ul.appendChild(el('li', null, e));
+      for (const it of issues) {
+        const li = el('li', null, it.message);
+        if (it.cells && it.cells.length) {
+          li.tabIndex = 0;
+          li.dataset.cells = String(it.cells.length);
+          const on = () => markFixes(issues, it);
+          const off = () => markFixes(issues);
+          li.addEventListener('mouseenter', on);
+          li.addEventListener('focus', on);
+          li.addEventListener('click', on);
+          li.addEventListener('mouseleave', off);
+          li.addEventListener('blur', off);
+        }
+        ul.appendChild(li);
+      }
       div.appendChild(ul);
       box.appendChild(div);
       solveBtn.disabled = true;
+      offerRepair();
     }
     return ok;
   }
@@ -679,18 +1087,61 @@ export function initApp() {
     });
   }
 
+  // What to do about each way the camera can fail (scanner.failureReason()), plus
+  // 'stopped' for a camera that was live and then ended.
+  const CAMERA_PROBLEMS = {
+    insecure:
+      'The camera only works on a secure (https://) page. Open Solvent at its https:// address — or enter colors by hand; the solver works the same.',
+    denied:
+      'Camera access is blocked for this site. Allow it in your browser’s site settings (the camera or lock icon by the address bar; on iPhone: Settings › Safari › Camera), then Retry — or enter colors by hand.',
+    notfound: 'No camera was found on this device. Enter colors by hand — the solver works the same.',
+    busy: 'The camera is busy — another app or tab is using it. Close that, then Retry.',
+    stopped: 'The camera stopped — the phone may have paused it, or another app took it. Retry to bring it back.',
+    other: 'The camera couldn’t start. Retry — or enter colors by hand; the solver works the same.',
+  };
+  let cameraProblem = null;
+  function showCameraProblem(reason) {
+    cameraProblem = reason;
+    const msg = $('#camera-msg');
+    msg.innerHTML = '';
+    const box = el('div', 'camera-msg__box');
+    box.appendChild(el('p', null, CAMERA_PROBLEMS[reason] || CAMERA_PROBLEMS.other));
+    if (reason !== 'insecure') {
+      const retry = el('button', 'btn', 'Retry');
+      retry.type = 'button';
+      retry.id = 'btn-camera-retry';
+      retry.addEventListener('click', () => {
+        hideCameraProblem();
+        ensureCamera();
+      });
+      box.appendChild(retry);
+    }
+    msg.appendChild(box);
+    msg.dataset.reason = reason;
+    msg.hidden = false;
+    $('#btn-capture').disabled = true;
+  }
+  function hideCameraProblem() {
+    cameraProblem = null;
+    $('#camera-msg').hidden = true;
+  }
+  // A camera that was live and stopped (noticed by the live read-out's tick).
+  function cameraLost() {
+    stopAuto();
+    stopLive();
+    if (scanner) scanner.stop();
+    updateFlashButton();
+    showCameraProblem('stopped');
+  }
+
   async function startCamera() {
     scanner = createScanner({ video, gridN: mod.current.gridN });
     const ok = await scanner.start();
-    const msg = $('#camera-msg');
     const capBtn = $('#btn-capture');
     if (!ok) {
-      msg.hidden = false;
-      msg.textContent =
-        'Camera unavailable. That is fine — use “Enter colors by hand,” the solver works the same.';
-      capBtn.disabled = true;
+      showCameraProblem(scanner.failureReason());
     } else {
-      msg.hidden = true;
+      hideCameraProblem();
       capBtn.disabled = false;
       // Auto-detect a mirrored (front / selfie) camera and flip guidance to
       // match. Users can still override with the Mirror toggle.
@@ -718,7 +1169,6 @@ export function initApp() {
     if (!scanner || !scanner.isActive()) return false;
     const samples = scanner.sample();
     if (!samples) return false;
-    const order = scanFaces();
     const step = scanSeq()[captureIndex];
     const f = step.face;
     // The camera reads cells in its own frame; re-seat them onto the facelet grid
@@ -728,16 +1178,49 @@ export function initApp() {
     // ambiguous reads get flagged for a recheck at Verify. Falls back cleanly to
     // the plain classifier (and no flags) for a module that doesn't opt in.
     const thr = mod.current.confidenceThreshold ?? 0;
+    let view;
     if (typeof mod.current.classifyColorDetailed === 'function') {
       const detailed = samples.map((rgb) => mod.current.classifyColorDetailed(rgb));
-      faces[f] = seat(detailed.map((d) => d.color));
+      view = detailed.map((d) => d.color);
+      faces[f] = seat(view);
       lowConf[f] = seat(detailed.map((d) => d.confidence < thr));
     } else {
-      faces[f] = seat(samples.map((rgb) => mod.current.classifyColor(rgb)));
+      view = samples.map((rgb) => mod.current.classifyColor(rgb));
+      faces[f] = seat(view);
       lowConf[f] = faces[f].map(() => false);
     }
+    rawRgb[f] = seat(samples);
     dismissMirrorNudge();
-    // advance to next unfilled face
+    if (rescanning === f) {
+      const k = rescanTurn(f, faces[f]);
+      faces[f] = rotateGrid(faces[f], mod.current.gridN, k);
+      lowConf[f] = rotateGrid(lowConf[f], mod.current.gridN, k);
+      rawRgb[f] = rotateGrid(rawRgb[f], mod.current.gridN, k);
+    }
+
+    // Does this face fit with the ones already captured? If not, hold the step
+    // and say why, rather than letting a wrong turn surface six faces later.
+    const unchanged = lastCaptureView !== null && !viewChanged;
+    rescanBase = lastCaptureView;
+    lastCaptureView = view;
+    viewChanged = false;
+    const problem =
+      typeof mod.current.checkCapture === 'function' ? mod.current.checkCapture(faces, captureIndex, { unchanged }) : null;
+    if (problem) {
+      showCaptureWarning(problem, unchanged);
+      updateCaptureTarget();
+      confirmFeedback('warn');
+      return true;
+    }
+    hideCaptureWarning();
+    if (rescanning === f) finishRescan();
+    else advanceAfterCapture();
+    return true;
+  }
+
+  // Move on to the next face still to scan, or to Verify once all six are in.
+  function advanceAfterCapture() {
+    const order = scanFaces();
     let next = (captureIndex + 1) % order.length;
     for (let i = 0; i < order.length; i++) {
       if (!isFaceFilled(order[next])) break;
@@ -750,9 +1233,44 @@ export function initApp() {
       goReview();
     } else {
       confirmFeedback('tick');
+      showTurnCue();
     }
-    return true;
   }
+
+  // ---- capture warning ------------------------------------------------------
+  // The view to compare against after "Rescan": the last capture the user KEPT,
+  // not the one being discarded, so re-aiming at a misread face isn't mistaken
+  // for "the cube wasn't turned".
+  let rescanBase = null;
+  function showCaptureWarning(problem, unchanged) {
+    const prev = captureIndex > 0 ? mod.current.faceLabels[scanSeq()[captureIndex - 1].face] : null;
+    $('#capture-warning-text').textContent = problem.message;
+    $('#capture-warning-hint').textContent = unchanged
+      ? 'Follow the turn the guide shows, then capture again.'
+      : prev
+        ? `Usually the cube was turned the wrong way: turn back to the ${prev} face and follow the turn again. If a colour was misread instead, rescan from a better angle.`
+        : 'If a colour was misread, rescan from a better angle.';
+    $('#capture-warning').hidden = false;
+  }
+  function hideCaptureWarning() {
+    $('#capture-warning').hidden = true;
+  }
+  $('#btn-warn-rescan').addEventListener('click', () => {
+    const f = scanSeq()[captureIndex].face;
+    const n = mod.current.gridN * mod.current.gridN;
+    faces[f] = new Array(n).fill(null);
+    lowConf[f] = new Array(n).fill(false);
+    rawRgb[f] = new Array(n).fill(null);
+    lastCaptureView = rescanBase;
+    viewChanged = false;
+    hideCaptureWarning();
+    updateCaptureTarget();
+  });
+  $('#btn-warn-keep').addEventListener('click', () => {
+    hideCaptureWarning();
+    if (rescanning) finishRescan();
+    else advanceAfterCapture();
+  });
 
   $('#btn-capture').addEventListener('click', () => {
     commitCapture();
@@ -760,6 +1278,9 @@ export function initApp() {
 
   $('#btn-skip-face').addEventListener('click', () => {
     stopAuto(); // a manual jump: drop any in-progress auto countdown
+    endRescan();
+    hideCaptureWarning();
+    hideTurnCue();
     captureIndex = (captureIndex + 1) % scanFaces().length;
     updateCaptureTarget();
   });
@@ -901,8 +1422,18 @@ export function initApp() {
   }
   // Pause sampling when the tab is backgrounded; resume when it returns.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopAuto();
-    else if (autoOn) startAuto();
+    if (document.hidden) {
+      stopAuto();
+      return;
+    }
+    if (autoOn) startAuto();
+    if (wakeWanted) holdAwake(true); // the browser let it go while hidden
+    // Back in the foreground on Scan with the camera gone (phones end it in the
+    // background): bring it back without making the user hunt for Retry.
+    if (screens.capture.classList.contains('is-active') && (cameraProblem === 'stopped' || (scanner && !scanner.isActive()))) {
+      hideCameraProblem();
+      ensureCamera();
+    }
   });
 
   // ---- hold-steady assist (opt-in, device-motion) ----------------------------
@@ -1012,8 +1543,11 @@ export function initApp() {
   }
 
   function goReview() {
+    endRescan();
     stopAuto();
     stopLive();
+    hideCaptureWarning();
+    hideTurnCue();
     if (scanner) scanner.stop();
     updateFlashButton();
     buildNet();
@@ -1021,11 +1555,16 @@ export function initApp() {
   }
   $('#btn-manual').addEventListener('click', goReview);
   $('#btn-back-capture').addEventListener('click', () => {
+    endRescan();
+    updateCaptureTarget();
     showScreen('capture');
     ensureCamera();
   });
   // Verify's reset: the same clean slate as New cube, but stay here for manual entry.
-  $('#btn-reset').addEventListener('click', resetCube);
+  $('#btn-reset').addEventListener('click', () => {
+    if (mod.current.faceOrder.some((f) => faces[f].some((c) => c != null))) remember('reset');
+    resetCube();
+  });
 
   // ---- new cube -------------------------------------------------------------
   // Clear everything that describes THE CUBE — stickers, scan flags, scan step,
@@ -1038,9 +1577,16 @@ export function initApp() {
     stopAuto();
     faces = mod.current.emptyFaces();
     lowConf = emptyLowConf();
+    rawRgb = emptyRaw();
     captureIndex = 0;
     solution = null;
     stepIndex = 0;
+    lastCaptureView = null;
+    rescanBase = null;
+    viewChanged = false;
+    endRescan();
+    hideCaptureWarning();
+    hideTurnCue();
     clearSolutionView();
     buildFaceProgress();
     buildNet();
@@ -1059,6 +1605,7 @@ export function initApp() {
   }
   // Start the next cube: clean slate, back to step 1, camera running once.
   function newCube() {
+    undoStack = [];
     resetCube();
     showScreen('capture');
     ensureCamera();
@@ -1158,8 +1705,9 @@ export function initApp() {
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
   // The "Set up your cube" card: how to orient the physical cube before move 1.
-  // The on-screen 3D cube (in the user's own colours) is the definitive anchor;
-  // for a 3x3 we also name the up/front centre colours as a quick shortcut.
+  // Every solution starts from the cube exactly as scanned, so the grip is simply
+  // "as for the first scan". A 3x3 names it by its up/front centres; a 2x2 has no
+  // centres, so it shows the scanned front and top faces as sticker grids.
   function renderSetupCard() {
     const screen = $('#screen-solution');
     let card = $('#solution-setup');
@@ -1180,7 +1728,7 @@ export function initApp() {
       el(
         'p',
         'setup-card__text',
-        'Turn your real cube so every side matches the cube on screen — drag the cube to check all six faces. Hold that exact grip for the whole solution; the turn directions only work from this one starting position.'
+        'Hold your cube exactly as you did for the first scan — the cube on screen shows that grip. Keep it for the whole solution: the turn directions only work from this one starting position.'
       )
     );
     if (solution.hold) {
@@ -1195,6 +1743,26 @@ export function initApp() {
       };
       row.appendChild(chip(solution.hold.up, 'on top'));
       row.appendChild(chip(solution.hold.front, 'facing you'));
+      card.appendChild(row);
+    } else {
+      // Facelet grids read F as seen from the front and U from above with its
+      // front edge at the bottom — exactly how the user looks at each in hand.
+      const row = el('div', 'setup-card__hold');
+      const grid = (f, where) => {
+        const wrap = el('span', 'setup-face');
+        const g = el('span', 'scan-readback__grid');
+        g.style.gridTemplateColumns = `repeat(${mod.current.gridN}, 1fr)`;
+        for (const c of faces[f]) {
+          const cell = el('i');
+          cell.style.background = mod.current.colorHex[c];
+          g.appendChild(cell);
+        }
+        wrap.appendChild(g);
+        wrap.appendChild(el('span', null, where));
+        return wrap;
+      };
+      row.appendChild(grid('F', 'Toward you'));
+      row.appendChild(grid('U', 'On top (front edge at the bottom)'));
       card.appendChild(row);
     }
   }
@@ -1220,6 +1788,10 @@ export function initApp() {
     }
   }
   function updateSolveReadout() {
+    // The 3D cube shows the move being waited on: which layer, which way.
+    if (renderer) {
+      renderer.showTurn(stepIndex < solution.moves.length ? mod.current.moveToTurn(solution.moves[stepIndex].name) : null);
+    }
     $('#move-counter').textContent = `Move ${stepIndex} / ${solution.moves.length}`;
     const hint = $('#move-hint');
     if (solution.moves.length === 0) {
@@ -1258,7 +1830,7 @@ export function initApp() {
     const name = sol.moves[stepIndex].name;
     const turn = mod.current.moveToTurn(name);
     const after = sol.frames[stepIndex + 1];
-    if (renderer) await renderer.animateMove(turn, after, ANIM_MS);
+    if (renderer) await (inFlight = renderer.animateMove(turn, after, ANIM_MS));
     animating = false;
     if (solution !== sol) {
       updateStepButtons(); // the turn belonged to a cleared cube; free the controls
@@ -1277,7 +1849,7 @@ export function initApp() {
     const turn = mod.current.moveToTurn(name);
     const reverse = { axis: turn.axis, sign: turn.sign, quarters: -turn.quarters };
     const before = sol.frames[stepIndex - 1];
-    if (renderer) await renderer.animateMove(reverse, before, ANIM_MS);
+    if (renderer) await (inFlight = renderer.animateMove(reverse, before, ANIM_MS));
     animating = false;
     if (solution !== sol) {
       updateStepButtons(); // the turn belonged to a cleared cube; free the controls
@@ -1287,14 +1859,18 @@ export function initApp() {
     updateSolveReadout();
     updateStepButtons();
   }
+  // Step one turn at a time so the animation reads clearly. A turn already in
+  // flight (Play, or a Next tap) is awaited, never spun on: goNext() returns at
+  // once while animating, and looping on that starved the very animation frame
+  // it was waiting for, freezing the page. A newer jump supersedes this one.
   async function jumpTo(target) {
-    // step one at a time so the animation reads clearly
     const sol = solution;
-    while (solution === sol && stepIndex < target) {
-      await goNext();
-    }
-    while (solution === sol && stepIndex > target) {
-      await goPrev();
+    const mine = ++jumpSeq;
+    while (solution === sol && mine === jumpSeq) {
+      if (animating) await inFlight;
+      else if (stepIndex < target) await goNext();
+      else if (stepIndex > target) await goPrev();
+      else break;
     }
   }
 
@@ -1344,6 +1920,7 @@ export function initApp() {
       if (renderer) renderer.setGeom(solution.frames[0]);
       updateSolveReadout();
     }
+    jumpSeq++; // Play takes over from any jump in progress
     playing = true;
     updatePlayButton();
     playLoop();
@@ -1437,6 +2014,8 @@ export function initApp() {
   window.__solvent = {
     setFaces(next) {
       faces = next;
+      rawRgb = emptyRaw(); // injected faces carry no camera samples
+      undoStack = [];
       // Manually-injected faces (and the e2e path) carry no scan confidence, so
       // clear any flags — uncertainty is a camera-only signal.
       lowConf = emptyLowConf();
@@ -1453,14 +2032,21 @@ export function initApp() {
     currentFrameSolved: () => {
       if (!solution) return false;
       const geom = solution.frames[stepIndex];
-      return isSolved(stateFromGeom(geom));
+      return sixSolidFaces(geom);
     },
     // Auto-play state, so the e2e can click Play and assert it reaches solved
     // then stops on its own.
     isPlaying: () => playing,
+    // The move the solution cube is currently pointing at, if any.
+    turnShown: () => (renderer ? renderer.turnShown() : null),
     // Everything that belongs to the current cube, so the e2e can prove a New
     // cube starts from nothing.
     snapshot: () => ({
+      guideColors: guide ? guide.shownColors() : null,
+      turnCue: isHidden($('#turn-cue')) ? null : $('#turn-cue').dataset.turn,
+      cameraProblem,
+      rescanning,
+      autoRingShown: !isHidden($('#auto-ring')),
       screen: Object.keys(screens).find((k) => screens[k].classList.contains('is-active')),
       size: mod.current.id,
       captureIndex,

@@ -59,6 +59,18 @@
           <div class="camera-wrap" id="camera-wrap">
             <video id="video" playsinline muted aria-label="Camera preview"></video>
             <div class="reticle" id="reticle" aria-hidden="true"></div>
+            <!-- Turn cue: right after a capture, the next turn sweeps across the
+                 preview itself — where the eyes are — not only in the guide panel. -->
+            <svg class="turn-cue" id="turn-cue" viewBox="0 0 100 100" aria-hidden="true" hidden>
+              <defs>
+                <marker id="turn-cue-head" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+                </marker>
+              </defs>
+              <path class="turn-cue__under" data-line pathLength="100" />
+              <path class="turn-cue__line" data-line pathLength="100" marker-end="url(#turn-cue-head)" />
+              <text class="turn-cue__label" x="90" y="53" text-anchor="middle"></text>
+            </svg>
             <!-- Auto-capture countdown ring: appears only when the "Auto" assist is
                  on and the frame has held steady + confident. Drawn over the reticle. -->
             <svg class="auto-ring" id="auto-ring" viewBox="0 0 100 100" aria-hidden="true" hidden>
@@ -108,6 +120,16 @@
               <button class="btn btn--primary" id="btn-capture">Capture face</button>
               <button class="btn" id="btn-skip-face">Skip</button>
             </div>
+            <!-- Capture-time check: shown when the face just captured can't belong to
+                 the same cube as the faces before it (sizes/capturecheck.js). -->
+            <div class="capture-warning" id="capture-warning" role="alert" hidden>
+              <p class="capture-warning__text" id="capture-warning-text"></p>
+              <p class="capture-warning__hint" id="capture-warning-hint"></p>
+              <div class="capture-warning__actions">
+                <button class="btn" id="btn-warn-rescan" type="button">Rescan this face</button>
+                <button class="btn btn--ghost" id="btn-warn-keep" type="button">Keep it</button>
+              </div>
+            </div>
             <div class="mirror-nudge" id="mirror-nudge" hidden role="note">
               <span>Using a selfie camera? Tap <b>Mirror</b> to flip the turn directions.</span>
               <button class="mirror-nudge__x" id="btn-mirror-nudge-dismiss" type="button" aria-label="Dismiss selfie camera hint">×</button>
@@ -153,6 +175,7 @@
         <div class="review-actions">
           <button class="btn" id="btn-back-capture">Back to scan</button>
           <button class="btn btn--ghost" id="btn-reset">Reset cube</button>
+          <button class="btn btn--ghost" id="btn-undo" type="button" disabled>Undo</button>
           <button class="btn btn--primary" id="btn-solve">Solve</button>
         </div>
       </section>
@@ -197,6 +220,15 @@
       <span class="dot">·</span>
       <a href="https://github.com/ryakel/solvent" rel="noopener">Source</a>
     </footer>
+
+    <!-- Shown if anything unexpected throws: say so plainly, keep the cube. -->
+    <div class="oops" id="oops" role="alert" hidden>
+      <p class="oops__text" id="oops-text"></p>
+      <div class="oops__actions">
+        <button class="btn" id="btn-oops-copy" type="button">Copy details</button>
+        <button class="btn btn--ghost" id="btn-oops-dismiss" type="button">Dismiss</button>
+      </div>
+    </div>
 
     <script type="module" src="./src/ui/main.js"></script>
   </body>

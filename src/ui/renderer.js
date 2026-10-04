@@ -123,8 +123,69 @@ export function createRenderer(container, opts) {
     }
   }
 
+  // ---- next-turn cue -----------------------------------------------------------
+  // While the user turns their real cube, show the move on this one: the slab
+  // that turns is outlined, and a bold arrow circles it the way it turns (in the
+  // same rotation sense animateMove uses, so picture and animation agree). It
+  // rings the layer rather than sitting on a face, so it reads from any angle,
+  // and lives in the draggable group so it turns with the cube.
+  const cueGroup = new THREE.Group();
+  spin.add(cueGroup);
+  const cueInk = new THREE.MeshBasicMaterial({ color: 0xf4f6f8 });
+  const cueLine = new THREE.LineBasicMaterial({ color: 0xf4f6f8, transparent: true, opacity: 0.85 });
+  let cueInfo = null;
+  function clearCue() {
+    for (const child of [...cueGroup.children]) {
+      cueGroup.remove(child);
+      child.traverse((o) => o.geometry && o.geometry.dispose());
+    }
+    cueInfo = null;
+  }
+  // turn: { axis: 0|1|2, sign: ±1, quarters } as from a size module's moveToTurn,
+  // or null to clear.
+  function showTurn(turn) {
+    clearCue();
+    if (!turn) return;
+    const half = (CELL * cubiesPerEdge) / 2; // the cube spans ±half on every axis
+    const slabMid = turn.sign * (half - CELL / 2);
+    // Outline the slab that turns.
+    const size = [2 * half + 0.08, 2 * half + 0.08, 2 * half + 0.08];
+    size[turn.axis] = CELL + 0.08;
+    const box = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(size[0], size[1], size[2])),
+      cueLine
+    );
+    box.position.setComponent(turn.axis, slabMid);
+    cueGroup.add(box);
+    // An arc around the axis through the slab's middle. (u, v) span the plane
+    // with u × v = +axis, so increasing angle IS positive rotation about +axis.
+    const u = AXIS_VEC[(turn.axis + 1) % 3];
+    const v = AXIS_VEC[(turn.axis + 2) % 3];
+    const dir = Math.sign(turn.quarters) || 1;
+    const sweep = (Math.abs(turn.quarters) >= 2 ? 300 : 200) * (Math.PI / 180);
+    const r = half * 1.62;
+    const a0 = Math.PI * 0.15;
+    const at = (t) => {
+      const a = a0 + dir * sweep * t;
+      return u.clone().multiplyScalar(r * Math.cos(a)).add(v.clone().multiplyScalar(r * Math.sin(a)))
+        .add(AXIS_VEC[turn.axis].clone().multiplyScalar(slabMid));
+    };
+    const pts = [];
+    for (let i = 0; i <= 64; i++) pts.push(at((i / 64) * 0.92));
+    cueGroup.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 96, 0.045, 10), cueInk));
+    // Arrowhead: a cone at the end, pointing along the direction of travel.
+    const tip = at(1);
+    const back = at(0.92);
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.13, tip.distanceTo(back) * 1.25, 16), cueInk);
+    head.position.copy(back.clone().add(tip).multiplyScalar(0.5));
+    head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tip.clone().sub(back).normalize());
+    cueGroup.add(head);
+    cueInfo = { axis: turn.axis, sign: turn.sign, quarters: turn.quarters };
+  }
+
   // Animate a face turn, then snap to `geomAfter`. Returns a promise.
   function animateMove(turn, geomAfter, durationMs) {
+    clearCue(); // the animation is the cue now
     return new Promise((resolve) => {
       if (reducedMotion || durationMs <= 0) {
         setGeom(geomAfter);
@@ -221,5 +282,15 @@ export function createRenderer(container, opts) {
     if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
   }
 
-  return { setGeom, animateMove, resize, dispose, get reducedMotion() { return reducedMotion; } };
+  return {
+    setGeom,
+    animateMove,
+    showTurn,
+    turnShown: () => cueInfo,
+    resize,
+    dispose,
+    get reducedMotion() {
+      return reducedMotion;
+    },
+  };
 }

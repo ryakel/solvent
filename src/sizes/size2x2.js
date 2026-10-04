@@ -19,7 +19,6 @@ import {
 } from '../core/cube2.js';
 import {
   faceColorsFromState,
-  stateFromFaces,
   validateFaces,
   geomFromFaces,
   SOLVED_FACES,
@@ -31,9 +30,11 @@ import {
   isMirror2,
   reflectXGeom,
   alignGeom,
+  alignRotation,
   findMove,
 } from '../core/mirror2.js';
 import { buildScanSequence } from './scanpath.js';
+import { makeCaptureCheck } from './capturecheck.js';
 
 // Palette (mirrors DESIGN.md). Used for the 3D stickers, the correction grid,
 // and camera color classification.
@@ -277,72 +278,77 @@ export const SCAN_SEQUENCE = buildScanSequence(SCAN_STEPS, {
   geomFromFaces,
 }).map((s) => ({ ...s, ...describeScanStep(s.turn, s.face) }));
 
+// Does a just-captured face fit with the faces already captured? (capturecheck.js)
+const checkCapture = makeCaptureCheck({
+  faceOrder: FACE_ORDER,
+  gridN: N,
+  geomFromFaces,
+  scanSequence: SCAN_SEQUENCE,
+  hasCenters: false,
+  faceLabels: FACE_LABELS,
+  colorNames: COLOR_NAMES,
+});
+
 function emptyFaces() {
   const f = {};
   for (const face of FACE_ORDER) f[face] = new Array(N * N).fill(null);
   return f;
 }
 
+// Carry a solution computed in the solver's frame back onto the cube as the user
+// holds it: map every frame through `align` (fixed for the whole solution) and
+// read each physical move straight off consecutive frames, so the move names can
+// never disagree with the animation.
+function inUserFrame(canon, userGeom, align) {
+  // validate() guarantees a real cube, so alignment and every move lookup succeed;
+  // if that ever breaks, fail with words rather than a TypeError at Solve.
+  const toUser = align(canon[0], userGeom);
+  if (!toUser) throw new Error('This cube does not match a real 2×2 — recheck the stickers.');
+  const frames = canon.map(toUser);
+  const names = [];
+  for (let k = 0; k < frames.length - 1; k++) {
+    const name = findMove(frames[k], frames[k + 1]);
+    if (!name) throw new Error('Could not read a face turn off the solution — recheck the stickers.');
+    names.push(name);
+  }
+  return { frames, names };
+}
+
 // Solve from a validated faces object. Returns everything the UI needs:
 //   moves: [{ name, hint }]
-//   frames: geometry after each step, starting from the normalized scramble
-//   normalizedGeom: the scramble as rendered (reference corner fixed)
+//   frames: geometry after each step, starting from the cube EXACTLY as scanned
+//   normalizedGeom: frames[0]
+//
+// The solver works in its own frame: it rotates the cube so a reference corner
+// sits still (see solver2.js), and a mirror-scheme cube is reflected first (the
+// compact state can't encode handedness; see core/mirror2.js). Both are undone
+// here — a rotation for a standard cube, an isometry + colour map for a mirror
+// one — so the solution starts in the grip the user scanned with, not one they
+// would have to find by eye on a scrambled cube.
 function solve(faces) {
-  const rawGeom = geomFromFaces(faces);
-
-  // Mirror-scheme cube: the compact state can't encode its handedness, so solving
-  // it directly mis-solves. Reflect it into the standard frame, solve there, then
-  // align the solved frames back onto the user's actual cube and read each physical
-  // move off consecutive frames — so colours, orientation, and moves all match the
-  // cube in hand and end solved. (See core/mirror2.js.)
-  if (isMirror2(rawGeom)) {
-    const { normalized, moves } = solveState(stateFromGeom(reflectXGeom(rawGeom)));
-    const canon = [geomFromState(normalized)];
-    let s = normalized;
-    for (const m of moves) {
-      s = applyMove(s, m);
-      canon.push(geomFromState(s));
-    }
-    // validate() guarantees a consistent mirror cube, so both lookups succeed; if
-    // that ever breaks, fail with words rather than a TypeError at the Solve button.
-    const toUser = alignGeom(canon[0], rawGeom);
-    if (!toUser) throw new Error('This cube does not match a real 2×2 — recheck the stickers.');
-    const frames = canon.map(toUser);
-    const names = [];
-    for (let k = 0; k < frames.length - 1; k++) {
-      const name = findMove(frames[k], frames[k + 1]);
-      if (!name) throw new Error('Could not read a face turn off the solution — recheck the stickers.');
-      names.push(name);
-    }
-    return {
-      moves: names.map((name) => ({ name, hint: moveHint(name) })),
-      frames,
-      normalizedGeom: frames[0],
-      hold: null,
-      faceColors: null,
-      mirror: true,
-      warning: MIRROR_NOTE,
-    };
-  }
-
-  const raw = stateFromFaces(faces);
-  const { normalized, moves } = solveState(raw);
-  const frames = [geomFromState(normalized)];
+  const v = validateFaces(faces);
+  if (!v.ok) throw new Error('invalid cube: ' + v.errors.join(' '));
+  const userGeom = geomFromFaces(faces);
+  const mirror = isMirror2(userGeom);
+  const start = stateFromGeom(mirror ? reflectXGeom(userGeom) : userGeom);
+  const { normalized, moves } = solveState(start);
+  const canon = [geomFromState(normalized)];
   let s = normalized;
   for (const m of moves) {
     s = applyMove(s, m);
-    frames.push(geomFromState(s));
+    canon.push(geomFromState(s));
   }
+  const { frames, names } = inUserFrame(canon, userGeom, mirror ? alignGeom : alignRotation);
   return {
-    moves: moves.map((name) => ({ name, hint: moveHint(name) })),
+    moves: names.map((name) => ({ name, hint: moveHint(name) })),
     frames,
     normalizedGeom: frames[0],
-    // A 2x2 has no centers to name a face by, so the on-screen cube is the only
-    // orientation anchor: the UI tells the user to match their cube to the screen.
+    // A 2x2 has no centers to name a face by: the grip is "as you held it for the
+    // first scan", which the UI shows as the scanned front and top faces.
     hold: null,
     faceColors: null,
-    mirror: false,
-    warning: null,
+    mirror,
+    warning: mirror ? MIRROR_NOTE : null,
   };
 }
 
@@ -362,6 +368,10 @@ export const size2x2 = {
   // Scan path for this size: ordered faces, each one whole-cube turn apart.
   scanSequence: SCAN_SEQUENCE,
   describeScanStep,
+  checkCapture,
+  // faces (possibly incomplete) -> geometry in the first scan's frame; drives the
+  // guide cube's colours
+  facesToGeom: geomFromFaces,
   emptyFaces,
   validate: validateFaces,
   classifyColor,

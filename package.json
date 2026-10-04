@@ -5,10 +5,10 @@
   "type": "module",
   "description": "Solvent — a precise 2x2 Rubik's cube solver web app.",
   "scripts": {
-    "test": "node --test tests/*.test.js",
-    "test:unit": "node --test tests/cube2.test.js tests/solver2.test.js tests/facelet.test.js",
+    "test": "node --test tests/*.test.js tests/e2e/*.test.js",
+    "test:unit": "node --test tests/*.test.js",
     "serve": "node scripts/serve.mjs 8080",
-    "test:e2e": "node --test tests/e2e.test.js"
+    "test:e2e": "node --test tests/e2e/*.test.js"
   },
   "license": "MIT",
   "devDependencies": {

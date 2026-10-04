@@ -10,6 +10,7 @@
 
 import { FACES, FACE_ORDER, COLORS } from './geometry.js';
 import { SLOTS } from './geometry.js';
+import { issueList } from './issues.js';
 import {
   solvedGeom3,
   cubieKind,
@@ -205,11 +206,13 @@ function diagnoseCenters(faces) {
         names.length === 2
           ? `${names[0]} and ${names[1]}`
           : `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
-      return (
-        `The ${list} centers are ${fs.length > 2 ? 'all' : 'both'} ${COLOR_NAMES[color]}, ` +
-        `but every face has a different center color. ` +
-        `Re-check ${fs.length > 2 ? 'those centers' : 'one of them'}.`
-      );
+      return {
+        message:
+          `The ${list} centers are ${fs.length > 2 ? 'all' : 'both'} ${COLOR_NAMES[color]}, ` +
+          `but every face has a different center color. ` +
+          `Re-check ${fs.length > 2 ? 'those centers' : 'one of them'}.`,
+        faces: fs,
+      };
     }
   }
 
@@ -217,15 +220,20 @@ function diagnoseCenters(faces) {
   // opposite colour pair (White–Yellow, Green–Blue, Red–Orange).
   for (const [a, b] of [['U', 'D'], ['F', 'B'], ['L', 'R']]) {
     if (OPPOSITE[centers[a]] !== centers[b]) {
-      return (
-        `The ${FACE_NAMES[a]} and ${FACE_NAMES[b]} centers are ${COLOR_NAMES[centers[a]]} ` +
-        `and ${COLOR_NAMES[centers[b]]}, but opposite faces must be an opposite pair ` +
-        `(White–Yellow, Green–Blue, Red–Orange). Re-check a center.`
-      );
+      return {
+        message:
+          `The ${FACE_NAMES[a]} and ${FACE_NAMES[b]} centers are ${COLOR_NAMES[centers[a]]} ` +
+          `and ${COLOR_NAMES[centers[b]]}, but opposite faces must be an opposite pair ` +
+          `(White–Yellow, Green–Blue, Red–Orange). Re-check a center.`,
+        faces: [a, b],
+      };
     }
   }
 
-  return "The center colours aren't a single real cube — check for a misread center.";
+  return {
+    message: "The center colours aren't a single real cube — check for a misread center.",
+    faces: [...FACE_ORDER],
+  };
 }
 
 function permParity(p) {
@@ -245,9 +253,21 @@ function permParity(p) {
   return parity;
 }
 
-function dedupe(arr) {
-  return [...new Set(arr)];
-}
+// Where each facelet of a REFLECTED faces object came from in the original:
+// REFLECTED_FROM[face][idx] = [origFace, origIdx]. A mirror-scheme scan is
+// analyzed reflected, so its findings' stickers are mapped back through this.
+const REFLECTED_FROM = (() => {
+  const labelled = {};
+  for (const f of FACE_ORDER) labelled[f] = Array.from({ length: N * N }, (_, i) => `${f}:${i}`);
+  const out = {};
+  for (const [f, cells] of Object.entries(reflectFaces(labelled))) {
+    out[f] = cells.map((label) => {
+      const [g, j] = label.split(':');
+      return [g, Number(j)];
+    });
+  }
+  return out;
+})();
 
 // ---- orientation detection (centers define the frame) -----------------------
 //
@@ -305,23 +325,19 @@ export const MIRROR_NOTE =
 // solver state and everything the caller needs to render/translate the solve.
 // Returns { ok, errors, state?, mirror, warning?, relabel?, inverse?, canonicalFaces?, rawFaces? }.
 export function analyzeFaces(faces) {
-  const errors = [];
+  const found = issueList();
 
   // 1. Every face has 9 known-color stickers.
   for (const face of FACE_ORDER) {
     const arr = faces[face];
     if (!arr || arr.length !== N * N) {
-      errors.push(`Face ${face} is missing stickers.`);
+      found.add(`Face ${face} is missing stickers.`);
       continue;
     }
-    for (const c of arr) {
-      if (!COLORS.includes(c)) {
-        errors.push(`Face ${face} has an unset or unknown sticker.`);
-        break;
-      }
-    }
+    const unset = arr.map((c, i) => (COLORS.includes(c) ? -1 : i)).filter((i) => i >= 0);
+    if (unset.length) found.add(`Face ${face} has an unset or unknown sticker.`, unset.map((i) => [face, i]));
   }
-  if (errors.length) return { ok: false, errors: dedupe(errors) };
+  if (found.length) return { ok: false, errors: found.messages(), issues: found.issues() };
 
   // 2. Centers must form one of the 24 real cube orientations. Try the proper
   //    (standard, right-handed) orientations first; if none match, try the cube as
@@ -335,10 +351,14 @@ export function analyzeFaces(faces) {
   if (rdet.ok) {
     const res = analyzeInFrame(reflected, rdet, true);
     if (res.ok) res.rawFaces = faces;
+    // Findings point at the reflected copy's stickers; point them back at the
+    // stickers the user actually entered.
+    for (const it of res.issues) it.cells = it.cells.map(([f, i]) => REFLECTED_FROM[f][i]);
     return res;
   }
 
-  return { ok: false, errors: [diagnoseCenters(faces)] };
+  const { message, faces: at } = diagnoseCenters(faces);
+  return { ok: false, errors: [message], issues: [{ message, cells: at.map((f) => [f, CENTER_IDX]) }] };
 }
 
 // Validate + solve-state for a faces object whose centers already matched a proper
@@ -346,100 +366,114 @@ export function analyzeFaces(faces) {
 // mirror-scheme scan (the caller reflects the solution's moves back to physical
 // turns and renders in the original colors).
 function analyzeInFrame(faces, det, mirror) {
-  const errors = [];
+  const found = issueList();
+  const fail = () => ({ ok: false, errors: found.messages(), issues: found.issues() });
 
   // Relabel into the canonical frame; validation below runs on canonical faces.
+  // Messages name colours as the USER sees them (det.inverse), not as relabelled:
+  // a cube held Yellow-up must say "Yellow appears 10 times", not "White".
   const cf = applyRelabel(faces, det.relabel);
+  const nameOf = (c) => COLOR_NAMES[det.inverse[c]];
+  const shown = (cols) => cols.map((c) => det.inverse[c]).join('/');
+  const cellsAt = (pos) => POS_TO_CELLS.get(posKey(pos)).map((cell) => [cell.face, cell.idx]);
 
-  // 3. Each color appears exactly 9 times.
+  // 3. Each color appears exactly 9 times. Too many of a colour marks every
+  //    sticker of it — one of those is the misread.
   const counts = Object.fromEntries(COLORS.map((c) => [c, 0]));
   for (const face of FACE_ORDER) for (const c of cf[face]) counts[c]++;
   for (const c of COLORS) {
     if (counts[c] !== N * N) {
-      errors.push(`${COLOR_NAMES[c]} appears ${counts[c]} times; a real cube has exactly ${N * N}.`);
+      const cells = [];
+      if (counts[c] > N * N) {
+        for (const face of FACE_ORDER) cf[face].forEach((x, i) => x === c && cells.push([face, i]));
+      }
+      found.add(`${nameOf(c)} appears ${counts[c]} times; a real cube has exactly ${N * N}.`, cells);
     }
   }
 
   // 4. Corners: 3 distinct, non-opposite colors, a real piece, all 8 distinct.
-  const cornerSeen = new Set();
+  const cornerSeen = new Map(); // piece key -> cells of the first slot holding it
   for (const slot of SLOTS) {
-    const cols = POS_TO_CELLS.get(posKey(slot.pos)).map((cell) => cf[cell.face][cell.idx]);
+    const cells = cellsAt(slot.pos);
+    const cols = cells.map(([f, i]) => cf[f][i]);
     const uniq = new Set(cols);
     const key = [...cols].sort().join('');
     if (uniq.size !== 3) {
-      errors.push(`The ${slot.name} corner repeats a color (${cols.join('/')}).`);
+      found.add(`The ${slot.name} corner repeats a color (${shown(cols)}).`, cells);
       continue;
     }
-    let opp = false;
-    for (const c of cols) {
-      if (uniq.has(OPPOSITE[c])) {
-        errors.push(
-          `The ${slot.name} corner pairs opposite colors ${COLOR_NAMES[c]} and ${COLOR_NAMES[OPPOSITE[c]]}, which can't touch.`
-        );
-        opp = true;
-        break;
-      }
+    const opp = cols.find((c) => uniq.has(OPPOSITE[c]));
+    if (opp) {
+      found.add(
+        `The ${slot.name} corner pairs opposite colors ${nameOf(opp)} and ${nameOf(OPPOSITE[opp])}, which can't touch.`,
+        cells
+      );
+      continue;
     }
-    if (opp) continue;
     if (!REAL_CORNER_SETS.has(key)) {
-      errors.push(`The ${slot.name} corner (${cols.join('/')}) is not a real cube piece.`);
+      found.add(`The ${slot.name} corner (${shown(cols)}) is not a real cube piece.`, cells);
       continue;
     }
     if (cornerSeen.has(key)) {
-      errors.push(`Two corners are the same piece (${slot.name} duplicates another).`);
+      found.add(`Two corners are the same piece (${slot.name} duplicates another).`, [...cornerSeen.get(key), ...cells]);
+    } else {
+      cornerSeen.set(key, cells);
     }
-    cornerSeen.add(key);
   }
 
   // 5. Edges: 2 distinct, non-opposite colors, a real piece, all 12 distinct.
-  const edgeSeen = new Set();
+  const edgeSeen = new Map();
   for (const slot of EDGE_SLOTS) {
-    const cols = POS_TO_CELLS.get(posKey(slot.pos)).map((cell) => cf[cell.face][cell.idx]);
+    const cells = cellsAt(slot.pos);
+    const cols = cells.map(([f, i]) => cf[f][i]);
     const uniq = new Set(cols);
     const key = [...cols].sort().join('');
     if (uniq.size !== 2) {
-      errors.push(`The ${slot.name} edge repeats a color (${cols.join('/')}).`);
+      found.add(`The ${slot.name} edge repeats a color (${shown(cols)}).`, cells);
       continue;
     }
     if (uniq.has(OPPOSITE[cols[0]])) {
-      errors.push(
-        `The ${slot.name} edge pairs opposite colors ${COLOR_NAMES[cols[0]]} and ${COLOR_NAMES[cols[1]]}, which can't touch.`
+      found.add(
+        `The ${slot.name} edge pairs opposite colors ${nameOf(cols[0])} and ${nameOf(cols[1])}, which can't touch.`,
+        cells
       );
       continue;
     }
     if (!REAL_EDGE_SETS.has(key)) {
-      errors.push(`The ${slot.name} edge (${cols.join('/')}) is not a real cube piece.`);
+      found.add(`The ${slot.name} edge (${shown(cols)}) is not a real cube piece.`, cells);
       continue;
     }
     if (edgeSeen.has(key)) {
-      errors.push(`Two edges are the same piece (${slot.name} duplicates another).`);
+      found.add(`Two edges are the same piece (${slot.name} duplicates another).`, [...edgeSeen.get(key), ...cells]);
+    } else {
+      edgeSeen.set(key, cells);
     }
-    edgeSeen.add(key);
   }
 
-  if (errors.length) return { ok: false, errors: dedupe(errors) };
+  if (found.length) return fail();
 
-  // 6. Solvability constraints (all three must hold for a real cube).
+  // 6. Solvability constraints (all three must hold for a real cube). These are
+  //    global — no single piece is to blame — so they mark no stickers.
   const cfGeom = geomFromFaces(cf);
   const state = stateFromGeom3(cfGeom);
   const twist = state.co.reduce((a, b) => a + b, 0) % 3;
   if (twist !== 0) {
-    errors.push(
+    found.add(
       'One corner is twisted in place — the total corner twist is off. Re-check a corner whose colors look rotated.'
     );
   }
   const flip = state.eo.reduce((a, b) => a + b, 0) % 2;
   if (flip !== 0) {
-    errors.push(
+    found.add(
       'One edge is flipped in place — the total edge flip is off. Re-check an edge whose two colors look swapped.'
     );
   }
   if (permParity(state.cp) !== permParity(state.ep)) {
-    errors.push(
+    found.add(
       'Two pieces are swapped — the corner and edge permutation parity disagree, which no sequence of turns can produce. Re-check for two swapped pieces.'
     );
   }
-  if (errors.length) return { ok: false, errors: dedupe(errors) };
+  if (found.length) return fail();
 
   // 7. Integrity: the compact state must round-trip to the exact same geometry.
   //    The state's corner orientation is a twist (0/1/2), so it cannot represent a
@@ -448,15 +482,16 @@ function analyzeInFrame(faces, det, mirror) {
   //    geometry from the state does not reproduce cf exactly, a piece is mirrored
   //    (the centers and pieces disagree on handedness) — not a physically real cube.
   if (!geomEquals3(geomFromState3(state), cfGeom)) {
-    errors.push(
+    found.add(
       'A piece is mirrored — its colors are arranged in the wrong handedness for a real cube. Re-check a corner or edge whose two side colors look swapped.'
     );
-    return { ok: false, errors: dedupe(errors) };
+    return fail();
   }
 
   return {
     ok: true,
     errors: [],
+    issues: [],
     state,
     mirror,
     warning: mirror ? MIRROR_NOTE : null,
@@ -469,8 +504,8 @@ function analyzeInFrame(faces, det, mirror) {
 // Validate a faces object as a physically real, solvable 3x3 cube held in ANY of
 // the 24 valid orientations. Returns { ok, errors: string[] }.
 export function validateFaces(faces) {
-  const { ok, errors, mirror, warning } = analyzeFaces(faces);
-  return { ok, errors, mirror: !!mirror, warning: warning || null };
+  const { ok, errors, issues, mirror, warning } = analyzeFaces(faces);
+  return { ok, errors, issues: issues || [], mirror: !!mirror, warning: warning || null };
 }
 
 // Parse a validated faces object into a solver state (canonical frame). Throws if
