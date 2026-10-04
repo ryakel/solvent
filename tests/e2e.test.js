@@ -245,12 +245,17 @@ test('prefers-reduced-motion snaps instead of animating', async () => {
     await page.click('#btn-solve');
     await page.waitForSelector('#screen-solution.is-active');
 
-    // With reduced motion, a Next click resolves effectively instantly.
-    const t0 = Date.now();
-    await page.click('#btn-next');
-    await page.waitForFunction(() => window.__solvent.getState().stepIndex === 1);
-    const dt = Date.now() - t0;
-    assert.ok(dt < 300, `reduced-motion step should be near-instant, took ${dt}ms`);
+    // With reduced motion, a Next click lands on the next frame without animating.
+    // Timed inside the page — click to stepIndex change — so Playwright round trips
+    // and a busy test machine can't masquerade as an animation. An animated turn
+    // takes 720ms; a snap takes a few milliseconds.
+    const dt = await page.evaluate(async () => {
+      const t0 = performance.now();
+      document.querySelector('#btn-next').click();
+      while (window.__solvent.getState().stepIndex !== 1) await new Promise((r) => setTimeout(r, 0));
+      return performance.now() - t0;
+    });
+    assert.ok(dt < 360, `reduced-motion step should snap, took ${Math.round(dt)}ms`);
 
     await context.close();
   } finally {
