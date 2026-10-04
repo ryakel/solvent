@@ -681,7 +681,29 @@ h1 {
 .net-face[data-face="R"] { grid-column: 3; grid-row: 2; }
 .net-face[data-face="B"] { grid-column: 4; grid-row: 2; }
 .net-face[data-face="D"] { grid-column: 2; grid-row: 3; }
-.net-face__label { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px; }
+/* Label and Rescan share a row where they fit, and stack on narrow phones. */
+.net-face__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 6px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+.net-face__label { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); }
+.net-face__rescan {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.net-face__rescan:hover { color: var(--ink); border-color: var(--ink-faint); }
 .sticker-grid { display: grid; gap: 5px; }
 .sticker {
   aspect-ratio: 1;

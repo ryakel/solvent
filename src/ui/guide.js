@@ -356,12 +356,16 @@ export function createGuide(container, opts) {
     }
   }
 
-  function showStep(i) {
+  // `still`: show the step's face presented, gently swaying, without demonstrating
+  // the turn into it — for a rescan, where the user holds that face any way round.
+  let still = false;
+  function showStep(i, opts = {}) {
     stepIndex = Math.max(0, Math.min(Math.max(0, SEQ.length - 1), i | 0));
+    still = !!opts.still;
     cycleStart = null; // restart the demonstration for the new step
     curPhase = null;
     const step = SEQ[stepIndex];
-    setIndicator(step ? step.turn : null);
+    setIndicator(step && !still ? step.turn : null);
     if (STEP_Q[stepIndex]) cube.quaternion.copy(STEP_Q[stepIndex]);
     if (reducedMotion) {
       matInk.opacity = 0.9;
@@ -387,7 +391,7 @@ export function createGuide(container, opts) {
       if (STEP_Q[stepIndex]) cube.quaternion.copy(STEP_Q[stepIndex]);
       inkTarget = 0.9;
       if (active) renderIndicator(active, 'hold', 1);
-    } else if (!step || !step.turn) {
+    } else if (!step || !step.turn || still) {
       // Starting hold: a slow, instrument-steady sway so the pose reads as 3D.
       swayA.setFromAxisAngle(Y, Math.sin(now / 1900) * 0.05);
       swayB.setFromAxisAngle(X, Math.sin(now / 2700 + 1) * 0.03);

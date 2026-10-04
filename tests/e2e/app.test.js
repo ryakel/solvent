@@ -1109,3 +1109,49 @@ test('an unexpected error shows a plain notice and the app keeps working', async
     server.close();
   }
 });
+
+// ---- rescan one face from Verify ---------------------------------------------------------
+
+test('Rescan fixes one misread face from Verify, whichever way round it is held', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const s = scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'", 'F']);
+    const truth = size2x2.faceColorsFromState(s);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(s));
+    const bad = 2; // the Back face is read with one wrong sticker
+    for (let k = 0; k < photos.length; k++) {
+      let cells = photos[k].cells;
+      if (k === bad) cells = [cells[0] === 'W' ? 'Y' : 'W', ...cells.slice(1)];
+      await presentFace(page, size2x2, cells);
+      await page.click('#btn-capture');
+      // The capture check may (rightly) object to the misread; keep it for now.
+      if (await page.$eval('#capture-warning', (n) => !n.hidden)) await page.click('#btn-warn-keep');
+    }
+    await page.waitForSelector('#screen-review.is-active');
+    await page.waitForSelector('.validation__errs');
+
+    // Rescan just that face, held a quarter-turn off.
+    const face = photos[bad].face;
+    await page.click(`.net-face__rescan[data-face="${face}"]`);
+    await page.waitForSelector('#screen-capture.is-active');
+    assert.equal(await page.textContent('#capture-step'), 'RESCAN');
+    const c = photos[bad].cells; // rotate the camera's view of the true face 90°
+    await presentFace(page, size2x2, [c[2], c[0], c[3], c[1]]);
+    await page.click('#btn-capture');
+
+    // Straight back to Verify, the face lined up and the cube real.
+    await page.waitForSelector('#screen-review.is-active');
+    await page.waitForSelector('.validation__ok');
+    const snap = await page.evaluate(() => window.__solvent.snapshot());
+    assert.deepEqual(snap.faces[face], truth[face]);
+    assert.equal(snap.rescanning, null);
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

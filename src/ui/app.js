@@ -6,7 +6,7 @@ import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
 import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
-import { findRepair, applyRepair } from '../sizes/repair.js';
+import { findRepair, applyRepair, rotateGrid } from '../sizes/repair.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 // Show/hide by the `hidden` ATTRIBUTE. `el.hidden = …` only works on HTML
@@ -338,7 +338,7 @@ export function initApp() {
       if (name === 'capture') {
         refreshGuideColors(); // stickers may have been repainted at Verify
         guide.start();
-        guide.showStep(captureIndex);
+        guide.showStep(captureIndex, { still: !!rescanning });
       } else {
         guide.stop();
       }
@@ -492,6 +492,7 @@ export function initApp() {
       flag.setAttribute('aria-hidden', 'true');
       chip.appendChild(flag);
       chip.addEventListener('click', () => {
+        endRescan();
         captureIndex = i;
         hideCaptureWarning();
         hideTurnCue();
@@ -530,15 +531,64 @@ export function initApp() {
       mirror,
       centers: mod.current.hasCenters,
     });
-    $('#capture-step').textContent = `STEP ${captureIndex + 1}/${seq.length}`;
-    $('#capture-turn').textContent = label;
+    const again = rescanning === f;
+    $('#capture-step').textContent = again ? 'RESCAN' : `STEP ${captureIndex + 1}/${seq.length}`;
+    $('#capture-turn').textContent = again ? 'ANY WAY ROUND' : label;
     $('#capture-face-name').textContent = mod.current.faceLabels[f];
     $('#capture-face-swatch').style.background = mod.current.colorHex[mod.current.faceColor[f]];
-    $('#capture-face-hint').textContent = text;
+    $('#capture-face-hint').textContent = again
+      ? `Hold the ${mod.current.faceLabels[f].toLowerCase()} face toward the camera — any way round. Solvent lines it up with the rest of the cube, then takes you back to Verify.`
+      : text;
     renderReadback(f);
     refreshGuideColors();
-    if (guide) guide.showStep(captureIndex);
+    if (guide) guide.showStep(captureIndex, { still: again });
     refreshFaceProgress();
+  }
+
+  // ---- rescan one face from Verify ----------------------------------------------
+  // The grip from the scan sequence is long gone by Verify, so a rescanned face
+  // can arrive any way round. Of its four rotations, keep the one that makes the
+  // whole cube real if exactly one does; else the one closest to the old read;
+  // else as the camera saw it. Then straight back to Verify.
+  let rescanning = null; // the face being rescanned, or null
+  let rescanOld = null; // that face's previous read, for lining the new one up
+  function rescanFace(f) {
+    rescanning = f;
+    rescanOld = faces[f].slice();
+    captureIndex = scanFaces().indexOf(f);
+    lastCaptureView = null; // no "picture hasn't changed" across screens
+    viewChanged = false;
+    hideCaptureWarning();
+    showScreen('capture');
+    updateCaptureTarget();
+    ensureCamera();
+  }
+  function rescanTurn(f, read) {
+    const n = mod.current.gridN;
+    const options = [0, 1, 2, 3].map((k) => rotateGrid(read, n, k));
+    const real = [0, 1, 2, 3].filter((k) => mod.current.validate({ ...faces, [f]: options[k] }).ok);
+    if (real.length === 1) return real[0];
+    const pool = real.length ? real : [0, 1, 2, 3];
+    if (!rescanOld || rescanOld.some((c) => c == null)) return pool[0];
+    let best = pool[0];
+    let bestScore = -1;
+    for (const k of pool) {
+      const score = options[k].filter((c, i) => c === rescanOld[i]).length;
+      if (score > bestScore) {
+        best = k;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+  function endRescan() {
+    rescanning = null;
+    rescanOld = null;
+  }
+  function finishRescan() {
+    endRescan();
+    confirmFeedback('tick');
+    goReview();
   }
 
   // Immediate per-face feedback: the moment a face is scanned, mirror the colors
@@ -722,7 +772,15 @@ export function initApp() {
     for (const f of mod.current.faceOrder) {
       const face = el('div', 'net-face');
       face.dataset.face = f;
-      face.appendChild(el('div', 'net-face__label', `${f} · ${mod.current.faceLabels[f]}`));
+      const head = el('div', 'net-face__head');
+      head.appendChild(el('div', 'net-face__label', `${f} · ${mod.current.faceLabels[f]}`));
+      const rescan = el('button', 'net-face__rescan', 'Rescan');
+      rescan.type = 'button';
+      rescan.dataset.face = f;
+      rescan.setAttribute('aria-label', `Rescan the ${mod.current.faceLabels[f]} face with the camera`);
+      rescan.addEventListener('click', () => rescanFace(f));
+      head.appendChild(rescan);
+      face.appendChild(head);
       const grid = el('div', 'sticker-grid');
       grid.style.gridTemplateColumns = `repeat(${mod.current.gridN}, 1fr)`;
       for (let i = 0; i < mod.current.gridN * mod.current.gridN; i++) {
@@ -1056,6 +1114,11 @@ export function initApp() {
       lowConf[f] = faces[f].map(() => false);
     }
     dismissMirrorNudge();
+    if (rescanning === f) {
+      const k = rescanTurn(f, faces[f]);
+      faces[f] = rotateGrid(faces[f], mod.current.gridN, k);
+      lowConf[f] = rotateGrid(lowConf[f], mod.current.gridN, k);
+    }
 
     // Does this face fit with the ones already captured? If not, hold the step
     // and say why, rather than letting a wrong turn surface six faces later.
@@ -1072,7 +1135,8 @@ export function initApp() {
       return true;
     }
     hideCaptureWarning();
-    advanceAfterCapture();
+    if (rescanning === f) finishRescan();
+    else advanceAfterCapture();
     return true;
   }
 
@@ -1125,7 +1189,8 @@ export function initApp() {
   });
   $('#btn-warn-keep').addEventListener('click', () => {
     hideCaptureWarning();
-    advanceAfterCapture();
+    if (rescanning) finishRescan();
+    else advanceAfterCapture();
   });
 
   $('#btn-capture').addEventListener('click', () => {
@@ -1134,6 +1199,7 @@ export function initApp() {
 
   $('#btn-skip-face').addEventListener('click', () => {
     stopAuto(); // a manual jump: drop any in-progress auto countdown
+    endRescan();
     hideCaptureWarning();
     hideTurnCue();
     captureIndex = (captureIndex + 1) % scanFaces().length;
@@ -1398,6 +1464,7 @@ export function initApp() {
   }
 
   function goReview() {
+    endRescan();
     stopAuto();
     stopLive();
     hideCaptureWarning();
@@ -1409,6 +1476,8 @@ export function initApp() {
   }
   $('#btn-manual').addEventListener('click', goReview);
   $('#btn-back-capture').addEventListener('click', () => {
+    endRescan();
+    updateCaptureTarget();
     showScreen('capture');
     ensureCamera();
   });
@@ -1433,6 +1502,7 @@ export function initApp() {
     rescanBase = null;
     viewChanged = false;
     undoRepair = null;
+    endRescan();
     hideCaptureWarning();
     hideTurnCue();
     clearSolutionView();
@@ -1891,6 +1961,7 @@ export function initApp() {
       guideColors: guide ? guide.shownColors() : null,
       turnCue: isHidden($('#turn-cue')) ? null : $('#turn-cue').dataset.turn,
       cameraProblem,
+      rescanning,
       autoRingShown: !isHidden($('#auto-ring')),
       screen: Object.keys(screens).find((k) => screens[k].classList.contains('is-active')),
       size: mod.current.id,
