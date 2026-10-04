@@ -53,6 +53,15 @@ for (const { mod, cube } of SIZES) {
     }
   });
 
+  test(`${mod.id}: every scan turn is a single quarter turn (no half-turn flips)`, () => {
+    // A quarter turn is the motion people do most exactly; a 180° flip is where
+    // they stop short or overshoot (SOLV-20).
+    for (const step of mod.scanSequence.slice(1)) {
+      assert.ok(['x', 'y'].includes(step.turn.axis), `step ${step.face} turns about ${step.turn.axis}`);
+      assert.equal(Math.abs(step.turn.deg), 90, `step ${step.face} turns ${step.turn.deg}°`);
+    }
+  });
+
   test(`${mod.id}: a camera following the scan guide reads the true facelets`, () => {
     const rand = rng(mod.id === '2x2' ? 7 : 11);
     for (let t = 0; t < 400; t++) {

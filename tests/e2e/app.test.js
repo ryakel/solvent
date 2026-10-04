@@ -754,9 +754,9 @@ test('the guide cube shows the stickers scanned so far, and the next turn sweeps
         assert.equal((await snap()).turnCue, 'right');
       }
     }
-    // ...and later yaws read mirrored. After F and R: yaw left; after B (Mirror
-    // on): right; after L: tip forward; after U: the 180° flip.
-    assert.deepEqual(cues, ['left', 'left', 'right', 'down', 'flip']);
+    // ...and later yaws read mirrored. After F and R: yaw left; after B: tip
+    // forward; after U and L (Mirror on): right. Every turn is a quarter turn.
+    assert.deepEqual(cues, ['left', 'left', 'down', 'right', 'right']);
 
     // New cube wipes the guide back to unscanned.
     await page.click('#btn-new-cube');

@@ -49,7 +49,7 @@ const FACE_LABELS = {
 export const FACE_COLOR = {};
 for (const f of FACE_ORDER) FACE_COLOR[f] = SOLVED_FACES[f][0];
 
-// Same whole-cube turns as the 2x2 (F→R→B→L→U→D), but the camera -> facelet mapping
+// Same whole-cube turns as the 2x2 (F→R→B→U→L→D), but the camera -> facelet mapping
 // is derived for the 3x3 grid (see scanpath.js).
 const SCAN_SEQUENCE = buildScanSequence(SCAN_STEPS, {
   faceOrder: FACE_ORDER,
@@ -176,7 +176,7 @@ export const size3x3 = {
   faceLabels: FACE_LABELS,
   faceColor: FACE_COLOR,
   solvedFaces: SOLVED_FACES,
-  // Scan path: same whole-cube turns as the 2x2 (F→R→B→L→U→D), a 3x3 grid.
+  // Scan path: same whole-cube turns as the 2x2 (F→R→B→U→L→D), a 3x3 grid.
   scanSequence: SCAN_SEQUENCE,
   describeScanStep,
   checkCapture,

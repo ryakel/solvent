@@ -108,3 +108,27 @@ test('turning the wrong way at step 2: caught by step 3 on a 3x3, mostly on the 
   assert.ok(caughtBy[1] / T > 0.5, `2x2: only ${caughtBy[1]}/${T} caught on the spot`);
   assert.ok(missed / T < 0.05, `2x2: ${missed}/${T} wrong turns never caught during the scan`);
 });
+
+test('a left turn where the path tips forward is caught, almost always on the spot', () => {
+  // The old path turned left three times before tipping; a returning user may
+  // turn left again out of habit where the tip now goes (SOLV-20).
+  const k = size2x2.scanSequence.findIndex((s) => s.turn && s.turn.axis === 'x');
+  assert.ok(k > 0, 'the scan path tips forward somewhere');
+  const habit = { [k]: { axis: 'y', deg: -90 } };
+  const rand3 = rng(89);
+  for (let t = 0; t < 300; t++) {
+    assert.equal(scanAs(size3x3, randomCube(size3x3, cube3, rand3), habit), k, `3x3 cube #${t}`);
+  }
+  const rand2 = rng(97);
+  const T = 1000;
+  let spot = 0;
+  let missed = 0;
+  for (let t = 0; t < T; t++) {
+    const at = scanAs(size2x2, randomCube(size2x2, cube2, rand2), habit);
+    if (at === k) spot++;
+    if (at < 0) missed++;
+  }
+  console.log(`    2x2 left turn instead of the tip: caught on the spot ${spot}, never ${missed} (of ${T})`);
+  assert.ok(spot / T > 0.85, `2x2: only ${spot}/${T} caught on the spot`);
+  assert.ok(missed / T < 0.02, `2x2: ${missed}/${T} never caught during the scan`);
+});

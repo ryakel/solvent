@@ -195,8 +195,8 @@ export function moveToTurn(name) {
 //
 // The scan sequence orders the six faces so that each consecutive step differs
 // from the previous one by exactly ONE simple whole-cube turn — a 90° yaw or a
-// 90°/180° tilt — expressed in the camera's frame (+x right, +y up, +z toward
-// the camera), signed by the right-hand rule about the positive axis. The guide
+// 90° tilt — expressed in the camera's frame (+x right, +y up, +z toward the
+// camera), signed by the right-hand rule about the positive axis. The guide
 // cube animates that exact turn, and the label/instruction below are derived
 // from the same turn spec, so the motion and the words can never disagree.
 //
@@ -204,15 +204,14 @@ export function moveToTurn(name) {
 // and the 3D guide consume it from whichever module is active.
 const YAW_LEFT_90 = { axis: 'y', deg: -90 };
 const TILT_FWD_90 = { axis: 'x', deg: 90 };
-const TILT_FWD_180 = { axis: 'x', deg: 180 };
-
-const FACE_WORDS = { U: 'top', D: 'bottom', F: 'front', B: 'back', R: 'right', L: 'left' };
 
 // Turn a spec into a short technical label + plain-language instruction.
 // `mirror` swaps left/right so the wording and the on-screen arrow match a
 // mirrored (selfie) camera preview, where the world reads reversed.
+//
+// The words say where the next face IS right now (on the right, on top), never
+// its name: once the path has tilted, the Left face can arrive from the right.
 export function describeScanStep(turn, face, { mirror = false, centers = true } = {}) {
-  const word = FACE_WORDS[face];
   if (!turn) {
     // A scrambled cube has no solid "white face", so we can't say "white on top".
     // A 3x3's CENTER squares never move, so they anchor the start even scrambled;
@@ -232,46 +231,50 @@ export function describeScanStep(turn, face, { mirror = false, centers = true } 
     };
   }
   const amount = Math.abs(turn.deg);
+  if (amount === 180) {
+    return {
+      label: 'HALF TURN · 180°',
+      text: 'Turn the whole cube a full half-turn — the face at the back comes round to the camera.',
+    };
+  }
   if (turn.axis === 'y') {
     let left = turn.deg < 0;
     if (mirror) left = !left;
     const dir = left ? 'left' : 'right';
+    const from = left ? 'right' : 'left';
     return {
       label: `TURN ${dir.toUpperCase()} · ${amount}°`,
-      text: `Turn the whole cube ${amount}° to the ${dir} — the ${word} face swings around to the camera.`,
-    };
-  }
-  if (amount === 180) {
-    return {
-      label: 'FLIP FORWARD · 180°',
-      text: `Keep tipping forward — a full half-turn — so the ${word} face rolls up to the camera.`,
+      text: `Turn the whole cube ${amount}° to the ${dir} — the face on the ${from} swings around to the camera.`,
     };
   }
   const fwd = turn.deg > 0;
   return {
     label: `TILT ${fwd ? 'FORWARD' : 'BACK'} · ${amount}°`,
     text: fwd
-      ? `Tip the cube ${amount}° forward, top toward the camera — the ${word} face rolls down into view.`
-      : `Tip the cube ${amount}° back — the ${word} face rolls into view.`,
+      ? `Tip the cube ${amount}° forward, top toward the camera — the face on top rolls down into view.`
+      : `Tip the cube ${amount}° back — the face underneath rolls up into view.`,
   };
 }
 
-// F → R → B → L  (three 90° left yaws around the sides),
-// then U (tilt forward 90°), then D (keep tipping — a 180° flip).
+// Every turn is a single 90° quarter turn — the motion people do most exactly:
+// left, left, tip forward, left, left, showing F, R, B, U, L, D. After the tip the
+// cube lies on its side, and L then D come round from the right like the others.
+// No half-turn flip anywhere (SOLV-20).
 export const SCAN_STEPS = [
   { face: 'F', turn: null },
   { face: 'R', turn: YAW_LEFT_90 },
   { face: 'B', turn: YAW_LEFT_90 },
-  { face: 'L', turn: YAW_LEFT_90 },
   { face: 'U', turn: TILT_FWD_90 },
-  { face: 'D', turn: TILT_FWD_180 },
+  { face: 'L', turn: YAW_LEFT_90 },
+  { face: 'D', turn: YAW_LEFT_90 },
 ];
 
 // Each step also carries `cameraToFacelet`, derived from the geometry oracle (see
-// scanpath.js): where each camera cell lands on the facelet grid. The side faces
-// read straight across, but U and D are reached by tilting from a side face and
-// arrive rotated in the camera's view, so the capture must re-seat them. Building
-// the mapping throws at module load if a step ever stops presenting its face.
+// scanpath.js): where each camera cell lands on the facelet grid. Faces shown
+// before the tip read straight across; after it the cube lies on its side, so
+// some faces (U and L on this path) arrive rotated in the camera's view and the
+// capture must re-seat them. Building the mapping throws at module load if a
+// step ever stops presenting its face.
 export const SCAN_SEQUENCE = buildScanSequence(SCAN_STEPS, {
   faceOrder: FACE_ORDER,
   gridN: N,
