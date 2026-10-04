@@ -87,6 +87,13 @@ const ISOMETRIES = (() => {
   return out; // 6 * 8 = 48
 })();
 
+// The 24 proper rotations among them (determinant +1): the cube turned in the
+// hand, never reflected. det = sign(perm) * product of the axis signs.
+const PERM_SIGN = { '0,1,2': 1, '1,2,0': 1, '2,0,1': 1, '0,2,1': -1, '1,0,2': -1, '2,1,0': -1 };
+const ROTATIONS = ISOMETRIES.filter(
+  (M) => PERM_SIGN[M.perm.join(',')] * M.sign[0] * M.sign[1] * M.sign[2] === 1
+);
+
 function applyIso(M, v) {
   return [M.sign[0] * v[M.perm[0]], M.sign[1] * v[M.perm[1]], M.sign[2] * v[M.perm[2]]];
 }
@@ -137,6 +144,18 @@ export function alignGeom(fromGeom, toGeom) {
           stickers: c.stickers.map((s) => ({ normal: s.normal, color: C[s.color] })),
         }));
     }
+  }
+  return null;
+}
+
+// Find the whole-cube rotation that carries `fromGeom` exactly onto `toGeom` —
+// same colours, no reflection: the same physical cube, held differently. Returns
+// a function mapping ANY geometry in fromGeom's frame into toGeom's, or null.
+// Used to carry a standard 2x2 solution out of the solver's normalized frame
+// and back onto the cube as the user scanned it.
+export function alignRotation(fromGeom, toGeom) {
+  for (const M of ROTATIONS) {
+    if (geomEquals(transformGeom(fromGeom, M), toGeom)) return (geom) => transformGeom(geom, M);
   }
   return null;
 }

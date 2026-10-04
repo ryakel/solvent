@@ -6,7 +6,6 @@ import { createScanner } from './scanner.js';
 import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
 import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
-import { stateFromGeom, isSolved } from '../core/cube2.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, cls, txt) => {
@@ -17,6 +16,19 @@ const el = (tag, cls, txt) => {
 };
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Solved means six solid faces, whichever way up the cube is held — any size.
+function sixSolidFaces(geom) {
+  const byFace = new Map();
+  for (const c of geom) {
+    for (const s of c.stickers) {
+      const k = s.normal.join(',');
+      if (!byFace.has(k)) byFace.set(k, new Set());
+      byFace.get(k).add(s.color);
+    }
+  }
+  return byFace.size === 6 && [...byFace.values()].every((set) => set.size === 1);
+}
 // Solution turn duration. Kept deliberately unhurried so each move reads clearly.
 const ANIM_MS = REDUCED_MOTION ? 0 : 720;
 
@@ -1168,8 +1180,9 @@ export function initApp() {
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
   // The "Set up your cube" card: how to orient the physical cube before move 1.
-  // The on-screen 3D cube (in the user's own colours) is the definitive anchor;
-  // for a 3x3 we also name the up/front centre colours as a quick shortcut.
+  // Every solution starts from the cube exactly as scanned, so the grip is simply
+  // "as for the first scan". A 3x3 names it by its up/front centres; a 2x2 has no
+  // centres, so it shows the scanned front and top faces as sticker grids.
   function renderSetupCard() {
     const screen = $('#screen-solution');
     let card = $('#solution-setup');
@@ -1190,7 +1203,7 @@ export function initApp() {
       el(
         'p',
         'setup-card__text',
-        'Turn your real cube so every side matches the cube on screen — drag the cube to check all six faces. Hold that exact grip for the whole solution; the turn directions only work from this one starting position.'
+        'Hold your cube exactly as you did for the first scan — the cube on screen shows that grip. Keep it for the whole solution: the turn directions only work from this one starting position.'
       )
     );
     if (solution.hold) {
@@ -1205,6 +1218,26 @@ export function initApp() {
       };
       row.appendChild(chip(solution.hold.up, 'on top'));
       row.appendChild(chip(solution.hold.front, 'facing you'));
+      card.appendChild(row);
+    } else {
+      // Facelet grids read F as seen from the front and U from above with its
+      // front edge at the bottom — exactly how the user looks at each in hand.
+      const row = el('div', 'setup-card__hold');
+      const grid = (f, where) => {
+        const wrap = el('span', 'setup-face');
+        const g = el('span', 'scan-readback__grid');
+        g.style.gridTemplateColumns = `repeat(${mod.current.gridN}, 1fr)`;
+        for (const c of faces[f]) {
+          const cell = el('i');
+          cell.style.background = mod.current.colorHex[c];
+          g.appendChild(cell);
+        }
+        wrap.appendChild(g);
+        wrap.appendChild(el('span', null, where));
+        return wrap;
+      };
+      row.appendChild(grid('F', 'Toward you'));
+      row.appendChild(grid('U', 'On top (front edge at the bottom)'));
       card.appendChild(row);
     }
   }
@@ -1468,7 +1501,7 @@ export function initApp() {
     currentFrameSolved: () => {
       if (!solution) return false;
       const geom = solution.frames[stepIndex];
-      return isSolved(stateFromGeom(geom));
+      return sixSolidFaces(geom);
     },
     // Auto-play state, so the e2e can click Play and assert it reaches solved
     // then stops on its own.

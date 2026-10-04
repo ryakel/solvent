@@ -745,6 +745,15 @@ h1 {
   font-weight: 600;
   color: var(--ink);
 }
+.setup-face {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.setup-face .scan-readback__grid i { width: 18px; height: 18px; }
 .setup-chip .face-dot {
   width: 16px;
   height: 16px;
