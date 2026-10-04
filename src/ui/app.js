@@ -7,6 +7,7 @@ import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
 import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
 import { findRepair, applyRepair, rotateGrid } from '../sizes/repair.js';
+import { calibrateLabels } from '../core/calibrate.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 // Show/hide by the `hidden` ATTRIBUTE. `el.hidden = …` only works on HTML
@@ -77,6 +78,10 @@ export function initApp() {
   // ever set on the camera path (manual entry has no confidence signal), reset
   // alongside faces, and cleared for a sticker the moment the user repaints it.
   let lowConf = emptyLowConf();
+  // The camera's raw [r,g,b] behind each sticker, parallel to `faces`; null where
+  // there's no sample (not scanned, or painted by hand — hand paint is ground
+  // truth). Lets Verify re-read colours against the cube's own stickers.
+  let rawRgb = emptyRaw();
   let paintColor = mod.current.colors[0];
   let captureIndex = 0;
   let scanner = null;
@@ -231,6 +236,12 @@ export function initApp() {
   // A face flagged "uncertain" is one that was scanned (filled) and holds at
   // least one low-confidence sticker. Skipped / empty faces are never flagged —
   // they are merely incomplete, handled by the fill-in path.
+  function emptyRaw() {
+    const f = {};
+    const n = mod.current.gridN * mod.current.gridN;
+    for (const face of mod.current.faceOrder) f[face] = new Array(n).fill(null);
+    return f;
+  }
   function emptyLowConf() {
     const f = {};
     const n = mod.current.gridN * mod.current.gridN;
@@ -790,6 +801,7 @@ export function initApp() {
         st.addEventListener('click', () => {
           undoRepair = null; // a hand edit supersedes undoing an auto-fix
           faces[f][i] = paintColor;
+          if (rawRgb[f]) rawRgb[f][i] = null; // hand paint is ground truth
           // The user just verified this sticker by hand — clear its "recheck"
           // flag so the highlight and the summary count stay honest.
           if (lowConf[f]) lowConf[f][i] = false;
@@ -876,21 +888,68 @@ export function initApp() {
   let repairToken = 0;
   let undoRepair = null; // { faces, lowConf } from before the last applied fix
   const copyFaces = (x) => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, v.slice()]));
+  // Re-read every sticker against the cube's own colours (core/calibrate.js):
+  // offered only when that turns an impossible reading into a real cube. Not
+  // automatic — in simulation ~1 offer in 1,300 was a different real cube — so
+  // the changed stickers get the amber "check these" ring.
+  function colourReread() {
+    const order = mod.current.faceOrder;
+    const rgbs = [];
+    const labels = [];
+    const where = [];
+    for (const f of order) {
+      faces[f].forEach((c, i) => {
+        rgbs.push(rawRgb[f][i]);
+        labels.push(c);
+        where.push([f, i]);
+      });
+    }
+    if (rgbs.every((x) => !x)) return null; // entered by hand: nothing to re-read
+    const next = calibrateLabels({
+      rgbs,
+      labels,
+      colors: mod.current.colors,
+      perColor: mod.current.gridN * mod.current.gridN,
+      seedHex: mod.current.colorHex,
+    });
+    const changed = where.filter((_, k) => next[k] !== labels[k]);
+    if (!changed.length) return null;
+    const reread = copyFaces(faces);
+    where.forEach(([f, i], k) => (reread[f][i] = next[k]));
+    if (!mod.current.validate(reread).ok) return null;
+    const n = changed.length;
+    return {
+      faces: reread,
+      changed,
+      message:
+        `Re-reading the colors against your cube's own stickers makes this a real cube — ` +
+        `${n} sticker${n > 1 ? 's' : ''} change. They'll be ringed so you can check them against your cube.`,
+    };
+  }
+
   function offerRepair() {
     const token = repairToken;
     setTimeout(() => {
       if (token !== repairToken) return;
-      const r = findRepair(mod.current, faces);
-      if (!r || token !== repairToken) return;
+      const reread = colourReread();
+      const r = reread ? null : findRepair(mod.current, faces);
+      if ((!reread && !r) || token !== repairToken) return;
       const div = el('div', 'validation__repair');
-      div.appendChild(el('p', null, r.message));
-      const btn = el('button', 'btn btn--primary', 'Apply fix');
+      div.appendChild(el('p', null, (reread || r).message));
+      const btn = el('button', 'btn btn--primary', reread ? 'Re-read colors' : 'Apply fix');
       btn.type = 'button';
       btn.id = 'btn-apply-repair';
       btn.addEventListener('click', () => {
-        undoRepair = { faces: copyFaces(faces), lowConf: copyFaces(lowConf) };
-        faces = r.faces;
-        lowConf = applyRepair(lowConf, r, mod.current.gridN); // flags travel with their stickers
+        undoRepair = { faces: copyFaces(faces), lowConf: copyFaces(lowConf), rawRgb: copyFaces(rawRgb) };
+        if (reread) {
+          faces = reread.faces;
+          for (const [f, i] of reread.changed) lowConf[f][i] = true; // "check these"
+        } else {
+          faces = r.faces;
+          // Flags and samples travel with their stickers.
+          lowConf = applyRepair(lowConf, r, mod.current.gridN);
+          rawRgb = applyRepair(rawRgb, r, mod.current.gridN);
+        }
         refreshNet();
         refreshFaceProgress();
         validateNow();
@@ -932,6 +991,7 @@ export function initApp() {
         undo.addEventListener('click', () => {
           faces = undoRepair.faces;
           lowConf = undoRepair.lowConf;
+          rawRgb = undoRepair.rawRgb;
           undoRepair = null;
           refreshNet();
           refreshFaceProgress();
@@ -1113,11 +1173,13 @@ export function initApp() {
       faces[f] = seat(view);
       lowConf[f] = faces[f].map(() => false);
     }
+    rawRgb[f] = seat(samples);
     dismissMirrorNudge();
     if (rescanning === f) {
       const k = rescanTurn(f, faces[f]);
       faces[f] = rotateGrid(faces[f], mod.current.gridN, k);
       lowConf[f] = rotateGrid(lowConf[f], mod.current.gridN, k);
+      rawRgb[f] = rotateGrid(rawRgb[f], mod.current.gridN, k);
     }
 
     // Does this face fit with the ones already captured? If not, hold the step
@@ -1182,6 +1244,7 @@ export function initApp() {
     const n = mod.current.gridN * mod.current.gridN;
     faces[f] = new Array(n).fill(null);
     lowConf[f] = new Array(n).fill(false);
+    rawRgb[f] = new Array(n).fill(null);
     lastCaptureView = rescanBase;
     viewChanged = false;
     hideCaptureWarning();
@@ -1495,6 +1558,7 @@ export function initApp() {
     stopAuto();
     faces = mod.current.emptyFaces();
     lowConf = emptyLowConf();
+    rawRgb = emptyRaw();
     captureIndex = 0;
     solution = null;
     stepIndex = 0;
@@ -1931,6 +1995,7 @@ export function initApp() {
   window.__solvent = {
     setFaces(next) {
       faces = next;
+      rawRgb = emptyRaw(); // injected faces carry no camera samples
       undoRepair = null;
       // Manually-injected faces (and the e2e path) carry no scan confidence, so
       // clear any flags — uncertainty is a camera-only signal.

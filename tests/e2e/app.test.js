@@ -1155,3 +1155,53 @@ test('Rescan fixes one misread face from Verify, whichever way round it is held'
     server.close();
   }
 });
+
+// ---- re-read colours against the cube's own stickers -------------------------------------
+
+test('under warm light, Verify offers to re-read the colours — and gets the real cube', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const s = scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'", 'F']);
+    const truth = size2x2.faceColorsFromState(s);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(s));
+    // A warm lamp: blue and green drop away, whites drift toward yellow.
+    const warm = (c) => {
+      const v = parseInt(size2x2.colorHex[c].slice(1), 16);
+      const rgb = [(v >> 16) & 255, Math.round(((v >> 8) & 255) * 0.86), Math.round((v & 255) * 0.55)];
+      return '#' + rgb.map((x) => x.toString(16).padStart(2, '0')).join('');
+    };
+    for (const { cells } of photos) {
+      await page.evaluate((h) => window.__fakeCam.show(h, 2), cells.map(warm));
+      await page.waitForTimeout(450); // let the live read-out see the new face
+      await page.click('#btn-capture');
+      if (await page.$eval('#capture-warning', (n) => !n.hidden)) await page.click('#btn-warn-keep');
+    }
+    await page.waitForSelector('#screen-review.is-active');
+    await page.waitForSelector('.validation__errs'); // the raw read is impossible
+    const misread = await page.evaluate(() => window.__solvent.snapshot().faces);
+
+    await page.waitForSelector('#btn-apply-repair');
+    assert.match(await page.textContent('.validation__repair'), /Re-reading the colors against your cube's own stickers/);
+    await page.click('#btn-apply-repair');
+    await page.waitForSelector('.validation__ok');
+    const snap = await page.evaluate(() => window.__solvent.snapshot());
+    assert.deepEqual(snap.faces, truth, 'the re-read is the real cube');
+    // Every sticker it changed is ringed for checking.
+    const changed = size2x2.faceOrder.flatMap((f) => truth[f].map((c, i) => (c !== misread[f][i] ? `${f}:${i}` : null))).filter(Boolean);
+    assert.ok(changed.length > 0);
+    const ringed = await page.$$eval('#net .sticker[data-lowconf="true"]', (els) => els.map((e) => e.dataset.cell));
+    for (const k of changed) assert.ok(ringed.includes(k), `${k} changed but isn't ringed`);
+
+    await page.click('#btn-undo-repair');
+    await page.waitForSelector('.validation__errs');
+    assert.deepEqual((await page.evaluate(() => window.__solvent.snapshot())).faces, misread);
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
