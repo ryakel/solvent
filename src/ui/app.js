@@ -799,7 +799,8 @@ export function initApp() {
         st.dataset.cell = `${f}:${i}`;
         markSticker(st, f, i);
         st.addEventListener('click', () => {
-          undoRepair = null; // a hand edit supersedes undoing an auto-fix
+          if (faces[f][i] === paintColor) return; // no change, nothing to undo
+          remember('paint');
           faces[f][i] = paintColor;
           if (rawRgb[f]) rawRgb[f][i] = null; // hand paint is ground truth
           // The user just verified this sticker by hand — clear its "recheck"
@@ -886,8 +887,29 @@ export function initApp() {
   // read turned, two faces swapped — and offer it as one tap, with Undo. Run just
   // after validation (a few ms) and dropped if the stickers change meanwhile.
   let repairToken = 0;
-  let undoRepair = null; // { faces, lowConf } from before the last applied fix
   const copyFaces = (x) => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, v.slice()]));
+
+  // ---- Verify undo ---------------------------------------------------------------
+  // Every Verify edit — a sticker painted, Reset cube, an auto-fix or colour
+  // re-read — is undoable, newest first: stickers, their marks and their camera
+  // samples together. Per cube: New cube, a size switch or injected faces start
+  // it empty.
+  let undoStack = [];
+  function remember(kind) {
+    undoStack.push({ kind, faces: copyFaces(faces), lowConf: copyFaces(lowConf), rawRgb: copyFaces(rawRgb) });
+    if (undoStack.length > 200) undoStack.shift();
+  }
+  function undo() {
+    const last = undoStack.pop();
+    if (!last) return;
+    faces = last.faces;
+    lowConf = last.lowConf;
+    rawRgb = last.rawRgb;
+    refreshNet();
+    refreshFaceProgress();
+    validateNow();
+  }
+  $('#btn-undo').addEventListener('click', undo);
   // Re-read every sticker against the cube's own colours (core/calibrate.js):
   // offered only when that turns an impossible reading into a real cube. Not
   // automatic — in simulation ~1 offer in 1,300 was a different real cube — so
@@ -940,7 +962,7 @@ export function initApp() {
       btn.type = 'button';
       btn.id = 'btn-apply-repair';
       btn.addEventListener('click', () => {
-        undoRepair = { faces: copyFaces(faces), lowConf: copyFaces(lowConf), rawRgb: copyFaces(rawRgb) };
+        remember('fix');
         if (reread) {
           faces = reread.faces;
           for (const [f, i] of reread.changed) lowConf[f][i] = true; // "check these"
@@ -961,6 +983,7 @@ export function initApp() {
 
   function validateNow() {
     repairToken++; // any repair search for the previous stickers is stale
+    $('#btn-undo').disabled = undoStack.length === 0;
     updateUncertainNote();
     const box = $('#validation');
     const solveBtn = $('#btn-solve');
@@ -984,20 +1007,13 @@ export function initApp() {
     if (ok) {
       const div = el('div', 'validation__ok', 'This is a real, solvable cube. Ready to solve.');
       box.appendChild(div);
-      if (undoRepair) {
-        const undo = el('button', 'btn btn--ghost', 'Undo fix');
-        undo.type = 'button';
-        undo.id = 'btn-undo-repair';
-        undo.addEventListener('click', () => {
-          faces = undoRepair.faces;
-          lowConf = undoRepair.lowConf;
-          rawRgb = undoRepair.rawRgb;
-          undoRepair = null;
-          refreshNet();
-          refreshFaceProgress();
-          validateNow();
-        });
-        div.appendChild(undo);
+      // The fix just applied made it real: offer its undo right on this line.
+      if (undoStack.length && undoStack[undoStack.length - 1].kind === 'fix') {
+        const undoFix = el('button', 'btn btn--ghost', 'Undo fix');
+        undoFix.type = 'button';
+        undoFix.id = 'btn-undo-repair';
+        undoFix.addEventListener('click', undo);
+        div.appendChild(undoFix);
       }
       if (mirror && warning) {
         box.appendChild(el('div', 'validation__note', warning));
@@ -1545,7 +1561,10 @@ export function initApp() {
     ensureCamera();
   });
   // Verify's reset: the same clean slate as New cube, but stay here for manual entry.
-  $('#btn-reset').addEventListener('click', resetCube);
+  $('#btn-reset').addEventListener('click', () => {
+    if (mod.current.faceOrder.some((f) => faces[f].some((c) => c != null))) remember('reset');
+    resetCube();
+  });
 
   // ---- new cube -------------------------------------------------------------
   // Clear everything that describes THE CUBE — stickers, scan flags, scan step,
@@ -1565,7 +1584,6 @@ export function initApp() {
     lastCaptureView = null;
     rescanBase = null;
     viewChanged = false;
-    undoRepair = null;
     endRescan();
     hideCaptureWarning();
     hideTurnCue();
@@ -1587,6 +1605,7 @@ export function initApp() {
   }
   // Start the next cube: clean slate, back to step 1, camera running once.
   function newCube() {
+    undoStack = [];
     resetCube();
     showScreen('capture');
     ensureCamera();
@@ -1996,7 +2015,7 @@ export function initApp() {
     setFaces(next) {
       faces = next;
       rawRgb = emptyRaw(); // injected faces carry no camera samples
-      undoRepair = null;
+      undoStack = [];
       // Manually-injected faces (and the e2e path) carry no scan confidence, so
       // clear any flags — uncertainty is a camera-only signal.
       lowConf = emptyLowConf();

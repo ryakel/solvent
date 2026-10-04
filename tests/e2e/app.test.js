@@ -1205,3 +1205,66 @@ test('under warm light, Verify offers to re-read the colours — and gets the re
     server.close();
   }
 });
+
+// ---- Verify undo ----------------------------------------------------------------------------
+
+test('every Verify edit is undoable — a paint, Reset cube, a fix', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext({ reducedMotion: 'reduce' });
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+    const good = scrambledFaces(['R', 'U', "F'", 'R2', "U'"]);
+    await page.evaluate((f) => {
+      window.__solvent.goReview();
+      window.__solvent.setFaces(f);
+    }, good);
+    const faces = () => page.evaluate(() => window.__solvent.snapshot().faces);
+    const undoDisabled = () => page.$eval('#btn-undo', (b) => b.disabled);
+    assert.ok(await undoDisabled(), 'nothing to undo yet');
+
+    // A mis-tapped paint.
+    const paint = good.F[0] === 'B' ? 'R' : 'B';
+    await page.click(`#palette .swatch-btn[aria-label="${{ B: 'Blue', R: 'Red' }[paint]}"]`);
+    await page.click('#net .sticker[data-cell="F:0"]');
+    assert.equal((await faces()).F[0], paint);
+    await page.click('#btn-undo');
+    assert.deepEqual(await faces(), good);
+    assert.ok(await undoDisabled());
+
+    // An accidental Reset cube — the whole scan comes back.
+    await page.click('#btn-reset');
+    assert.ok((await faces()).U.every((c) => c === null));
+    await page.click('#btn-undo');
+    assert.deepEqual(await faces(), good);
+
+    // A fix, then a paint: Undo walks back through both.
+    const bad = JSON.parse(JSON.stringify(good));
+    bad.U = [bad.U[2], bad.U[0], bad.U[3], bad.U[1]];
+    await page.evaluate((f) => window.__solvent.setFaces(f), bad);
+    await page.click('#btn-apply-repair');
+    await page.waitForSelector('.validation__ok');
+    assert.deepEqual(await faces(), good);
+    await page.click('#net .sticker[data-cell="F:0"]');
+    await page.click('#btn-undo'); // the paint
+    assert.deepEqual(await faces(), good);
+    await page.waitForSelector('#btn-undo-repair'); // last edit is the fix again
+    await page.click('#btn-undo'); // the fix
+    assert.deepEqual(await faces(), bad);
+
+    // A new cube starts with nothing to undo.
+    await page.click('#btn-new-cube');
+    await page.click('#btn-manual');
+    assert.ok(await undoDisabled());
+
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
