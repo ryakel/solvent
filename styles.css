@@ -587,6 +587,19 @@ h1 {
 
 .fineprint { font-size: 12.5px; color: var(--ink-faint); margin: 0; }
 
+/* Capture-time check: the face just captured doesn't fit with the ones before
+   it. Amber, like the low-confidence recheck — "look again", not a hard error. */
+.capture-warning {
+  border: 1px solid rgba(245, 197, 24, 0.45);
+  border-left: 3px solid var(--c-yellow);
+  background: rgba(245, 197, 24, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.capture-warning__text { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink); font-weight: 600; }
+.capture-warning__hint { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-dim); }
+.capture-warning__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
 /* ---------- review / net ---------- */
 .palette {
   display: flex;
@@ -842,6 +855,8 @@ h1 {
     margin-inline: auto;
   }
   .capture-actions--primary { order: -1; margin-inline: auto; width: min(100%, 46vh); }
+  /* Keep a capture warning right under the button it answers. */
+  .capture-warning { order: -1; }
   /* Tighten the header block so more of the viewport is the live preview. */
   .screen__head { margin-bottom: 14px; }
 }

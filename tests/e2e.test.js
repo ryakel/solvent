@@ -648,3 +648,56 @@ test('with Mirror on, the live dots and read-back flip with the preview; stored 
     server.close();
   }
 });
+
+// ---- capture-time check ----------------------------------------------------------
+
+test('a face that does not fit is held at capture, with Rescan and Keep', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const warning = () => page.$eval('#capture-warning', (n) => (n.hidden ? null : n.textContent));
+
+    // 2x2: capture the first face, then capture again without turning.
+    const two = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(scrambleState(cube2, ['R', 'U', "F'", 'R2'])));
+    await presentFace(page, size2x2, two[0].cells);
+    await page.click('#btn-capture');
+    assert.equal(await warning(), null, 'a first capture never warns');
+    await page.click('#btn-capture');
+    assert.match(await warning(), /hasn't changed/);
+    let snap = await page.evaluate(() => window.__solvent.snapshot());
+    assert.equal(snap.captureIndex, 1, 'the step is held');
+
+    // Rescan clears the face; the right face then goes through and advances.
+    await page.click('#btn-warn-rescan');
+    assert.equal(await warning(), null);
+    snap = await page.evaluate(() => window.__solvent.snapshot());
+    assert.ok(snap.faces[two[1].face].every((c) => c === null), 'Rescan clears the held face');
+    await presentFace(page, size2x2, two[1].cells);
+    await page.click('#btn-capture');
+    assert.equal(await warning(), null);
+    assert.equal((await page.evaluate(() => window.__solvent.snapshot())).captureIndex, 2);
+
+    // 3x3: showing the face OPPOSITE the first one at step 2 can't be right.
+    await page.click('.size-btn:nth-child(2)');
+    await page.waitForFunction(() => window.__solvent.snapshot().size === '3x3');
+    const three = scanPhotos(size3x3.scanSequence, size3x3.geomFromState(scrambleState(cube3, ['R', 'U', "F'", 'L2', 'D'])));
+    await presentFace(page, size3x3, three[0].cells);
+    await page.click('#btn-capture');
+    await presentFace(page, size3x3, three[2].cells); // the Back face, at the Right step
+    await page.click('#btn-capture');
+    assert.match(await warning(), /opposite the Front face/);
+    assert.equal((await page.evaluate(() => window.__solvent.snapshot())).captureIndex, 1);
+
+    // Keep moves on regardless (Verify still has the final say).
+    await page.click('#btn-warn-keep');
+    assert.equal(await warning(), null);
+    assert.equal((await page.evaluate(() => window.__solvent.snapshot())).captureIndex, 2);
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

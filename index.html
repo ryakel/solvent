@@ -108,6 +108,16 @@
               <button class="btn btn--primary" id="btn-capture">Capture face</button>
               <button class="btn" id="btn-skip-face">Skip</button>
             </div>
+            <!-- Capture-time check: shown when the face just captured can't belong to
+                 the same cube as the faces before it (sizes/capturecheck.js). -->
+            <div class="capture-warning" id="capture-warning" role="alert" hidden>
+              <p class="capture-warning__text" id="capture-warning-text"></p>
+              <p class="capture-warning__hint" id="capture-warning-hint"></p>
+              <div class="capture-warning__actions">
+                <button class="btn" id="btn-warn-rescan" type="button">Rescan this face</button>
+                <button class="btn btn--ghost" id="btn-warn-keep" type="button">Keep it</button>
+              </div>
+            </div>
             <div class="mirror-nudge" id="mirror-nudge" hidden role="note">
               <span>Using a selfie camera? Tap <b>Mirror</b> to flip the turn directions.</span>
               <button class="mirror-nudge__x" id="btn-mirror-nudge-dismiss" type="button" aria-label="Dismiss selfie camera hint">×</button>

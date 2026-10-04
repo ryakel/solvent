@@ -34,6 +34,7 @@ import {
   SCAN_STEPS,
 } from './size2x2.js';
 import { buildScanSequence } from './scanpath.js';
+import { makeCaptureCheck } from './capturecheck.js';
 
 const FACE_LABELS = {
   U: 'Up',
@@ -55,6 +56,17 @@ const SCAN_SEQUENCE = buildScanSequence(SCAN_STEPS, {
   gridN: N,
   geomFromFaces: geomFromRawFaces,
 }).map((s) => ({ ...s, ...describeScanStep(s.turn, s.face) }));
+
+// Does a just-captured face fit with the faces already captured? (capturecheck.js)
+const checkCapture = makeCaptureCheck({
+  faceOrder: FACE_ORDER,
+  gridN: N,
+  geomFromFaces: geomFromRawFaces,
+  scanSequence: SCAN_SEQUENCE,
+  hasCenters: true,
+  faceLabels: FACE_LABELS,
+  colorNames: COLOR_NAMES,
+});
 
 function emptyFaces() {
   const f = {};
@@ -167,6 +179,7 @@ export const size3x3 = {
   // Scan path: same whole-cube turns as the 2x2 (F→R→B→L→U→D), a 3x3 grid.
   scanSequence: SCAN_SEQUENCE,
   describeScanStep,
+  checkCapture,
   emptyFaces,
   validate: validateFaces,
   classifyColor,

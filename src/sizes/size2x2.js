@@ -34,6 +34,7 @@ import {
   findMove,
 } from '../core/mirror2.js';
 import { buildScanSequence } from './scanpath.js';
+import { makeCaptureCheck } from './capturecheck.js';
 
 // Palette (mirrors DESIGN.md). Used for the 3D stickers, the correction grid,
 // and camera color classification.
@@ -277,6 +278,17 @@ export const SCAN_SEQUENCE = buildScanSequence(SCAN_STEPS, {
   geomFromFaces,
 }).map((s) => ({ ...s, ...describeScanStep(s.turn, s.face) }));
 
+// Does a just-captured face fit with the faces already captured? (capturecheck.js)
+const checkCapture = makeCaptureCheck({
+  faceOrder: FACE_ORDER,
+  gridN: N,
+  geomFromFaces,
+  scanSequence: SCAN_SEQUENCE,
+  hasCenters: false,
+  faceLabels: FACE_LABELS,
+  colorNames: COLOR_NAMES,
+});
+
 function emptyFaces() {
   const f = {};
   for (const face of FACE_ORDER) f[face] = new Array(N * N).fill(null);
@@ -356,6 +368,7 @@ export const size2x2 = {
   // Scan path for this size: ordered faces, each one whole-cube turn apart.
   scanSequence: SCAN_SEQUENCE,
   describeScanStep,
+  checkCapture,
   emptyFaces,
   validate: validateFaces,
   classifyColor,

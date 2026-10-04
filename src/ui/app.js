@@ -132,6 +132,9 @@ export function initApp() {
       if (kind === 'complete') {
         tick(660, t0, 0.12, 0.05);
         tick(990, t0 + 0.1, 0.16, 0.05); // resolves up — "done"
+      } else if (kind === 'warn') {
+        tick(392, t0, 0.12, 0.05);
+        tick(294, t0 + 0.12, 0.18, 0.05); // falls — "look again"
       } else {
         tick(760, t0, 0.09, 0.045);
       }
@@ -145,6 +148,9 @@ export function initApp() {
     if (kind === 'complete') {
       haptic([16, 60, 28]); // set complete — a distinct double tick
       blip('complete');
+    } else if (kind === 'warn') {
+      haptic([40, 70, 40]); // the face doesn't fit — two firm pulses
+      blip('warn');
     } else {
       haptic(14); // one face locked in — a single crisp tick
       blip('tick');
@@ -324,6 +330,22 @@ export function initApp() {
     const n = mod.current.gridN;
     return Math.floor(i / n) * n + (n - 1 - (i % n));
   }
+  // Motion signal for the capture check (sizes/capturecheck.js): the camera-order
+  // colours at the last capture, and whether the live read-out has seen the
+  // picture change since. Turning a cube always sweeps other colours through the
+  // reticle, so a capture with no change since the previous one means the cube
+  // wasn't turned. Stickers alone can't say so: two faces of a real 2x2 can look
+  // identical.
+  let lastCaptureView = null;
+  let viewChanged = false;
+  function noteLiveView(view) {
+    if (!lastCaptureView || viewChanged) return;
+    let diff = 0;
+    view.forEach((c, i) => {
+      if (c !== lastCaptureView[i]) diff++;
+    });
+    if (diff >= Math.max(1, Math.ceil(view.length / 4))) viewChanged = true;
+  }
   function liveTick() {
     if (!liveActive()) return;
     let samples;
@@ -336,9 +358,9 @@ export function initApp() {
     const chips = $('#reticle').querySelectorAll('.reticle-chip');
     const detailed = typeof mod.current.classifyColorDetailed === 'function';
     const thr = mod.current.confidenceThreshold ?? 0.2;
+    const view = [];
     samples.forEach((rgb, i) => {
       const chip = chips[shownAt(i)];
-      if (!chip) return;
       let color, low;
       if (detailed) {
         const d = mod.current.classifyColorDetailed(rgb);
@@ -348,9 +370,12 @@ export function initApp() {
         color = mod.current.classifyColor(rgb);
         low = false;
       }
+      view.push(color);
+      if (!chip) return;
       chip.style.background = mod.current.colorHex[color];
       chip.dataset.low = low ? 'true' : 'false';
     });
+    noteLiveView(view);
     $('#reticle').classList.add('live');
   }
   function startLive() {
@@ -386,6 +411,7 @@ export function initApp() {
       chip.appendChild(flag);
       chip.addEventListener('click', () => {
         captureIndex = i;
+        hideCaptureWarning();
         updateCaptureTarget();
       });
       wrap.appendChild(chip);
@@ -740,7 +766,6 @@ export function initApp() {
     if (!scanner || !scanner.isActive()) return false;
     const samples = scanner.sample();
     if (!samples) return false;
-    const order = scanFaces();
     const step = scanSeq()[captureIndex];
     const f = step.face;
     // The camera reads cells in its own frame; re-seat them onto the facelet grid
@@ -750,16 +775,41 @@ export function initApp() {
     // ambiguous reads get flagged for a recheck at Verify. Falls back cleanly to
     // the plain classifier (and no flags) for a module that doesn't opt in.
     const thr = mod.current.confidenceThreshold ?? 0;
+    let view;
     if (typeof mod.current.classifyColorDetailed === 'function') {
       const detailed = samples.map((rgb) => mod.current.classifyColorDetailed(rgb));
-      faces[f] = seat(detailed.map((d) => d.color));
+      view = detailed.map((d) => d.color);
+      faces[f] = seat(view);
       lowConf[f] = seat(detailed.map((d) => d.confidence < thr));
     } else {
-      faces[f] = seat(samples.map((rgb) => mod.current.classifyColor(rgb)));
+      view = samples.map((rgb) => mod.current.classifyColor(rgb));
+      faces[f] = seat(view);
       lowConf[f] = faces[f].map(() => false);
     }
     dismissMirrorNudge();
-    // advance to next unfilled face
+
+    // Does this face fit with the ones already captured? If not, hold the step
+    // and say why, rather than letting a wrong turn surface six faces later.
+    const unchanged = lastCaptureView !== null && !viewChanged;
+    rescanBase = lastCaptureView;
+    lastCaptureView = view;
+    viewChanged = false;
+    const problem =
+      typeof mod.current.checkCapture === 'function' ? mod.current.checkCapture(faces, captureIndex, { unchanged }) : null;
+    if (problem) {
+      showCaptureWarning(problem, unchanged);
+      updateCaptureTarget();
+      confirmFeedback('warn');
+      return true;
+    }
+    hideCaptureWarning();
+    advanceAfterCapture();
+    return true;
+  }
+
+  // Move on to the next face still to scan, or to Verify once all six are in.
+  function advanceAfterCapture() {
+    const order = scanFaces();
     let next = (captureIndex + 1) % order.length;
     for (let i = 0; i < order.length; i++) {
       if (!isFaceFilled(order[next])) break;
@@ -773,8 +823,40 @@ export function initApp() {
     } else {
       confirmFeedback('tick');
     }
-    return true;
   }
+
+  // ---- capture warning ------------------------------------------------------
+  // The view to compare against after "Rescan": the last capture the user KEPT,
+  // not the one being discarded, so re-aiming at a misread face isn't mistaken
+  // for "the cube wasn't turned".
+  let rescanBase = null;
+  function showCaptureWarning(problem, unchanged) {
+    const prev = captureIndex > 0 ? mod.current.faceLabels[scanSeq()[captureIndex - 1].face] : null;
+    $('#capture-warning-text').textContent = problem.message;
+    $('#capture-warning-hint').textContent = unchanged
+      ? 'Follow the turn the guide shows, then capture again.'
+      : prev
+        ? `Usually the cube was turned the wrong way: turn back to the ${prev} face and follow the turn again. If a colour was misread instead, rescan from a better angle.`
+        : 'If a colour was misread, rescan from a better angle.';
+    $('#capture-warning').hidden = false;
+  }
+  function hideCaptureWarning() {
+    $('#capture-warning').hidden = true;
+  }
+  $('#btn-warn-rescan').addEventListener('click', () => {
+    const f = scanSeq()[captureIndex].face;
+    const n = mod.current.gridN * mod.current.gridN;
+    faces[f] = new Array(n).fill(null);
+    lowConf[f] = new Array(n).fill(false);
+    lastCaptureView = rescanBase;
+    viewChanged = false;
+    hideCaptureWarning();
+    updateCaptureTarget();
+  });
+  $('#btn-warn-keep').addEventListener('click', () => {
+    hideCaptureWarning();
+    advanceAfterCapture();
+  });
 
   $('#btn-capture').addEventListener('click', () => {
     commitCapture();
@@ -782,6 +864,7 @@ export function initApp() {
 
   $('#btn-skip-face').addEventListener('click', () => {
     stopAuto(); // a manual jump: drop any in-progress auto countdown
+    hideCaptureWarning();
     captureIndex = (captureIndex + 1) % scanFaces().length;
     updateCaptureTarget();
   });
@@ -1036,6 +1119,7 @@ export function initApp() {
   function goReview() {
     stopAuto();
     stopLive();
+    hideCaptureWarning();
     if (scanner) scanner.stop();
     updateFlashButton();
     buildNet();
@@ -1063,6 +1147,10 @@ export function initApp() {
     captureIndex = 0;
     solution = null;
     stepIndex = 0;
+    lastCaptureView = null;
+    rescanBase = null;
+    viewChanged = false;
+    hideCaptureWarning();
     clearSolutionView();
     buildFaceProgress();
     buildNet();
