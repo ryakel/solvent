@@ -75,6 +75,9 @@ export function createRenderer(container, opts) {
   }
 
   let cubies = []; // { mesh, pos:[x,y,z] } in cube coordinates (integers, centered)
+  // Bumped by every setGeom. A turn still animating when a new cube is shown sees
+  // the change and stops, so it can never paint the previous cube back over it.
+  let geomEpoch = 0;
 
   // Geometry coords are symmetric about 0: 2x2 in {-1,1}, 3x3 in {-1,0,1}.
   // Adjacent coords differ by 2/(N-1); scale so adjacent cubie centers sit CELL
@@ -95,6 +98,7 @@ export function createRenderer(container, opts) {
 
   // Build the cube from a geometry frame.
   function setGeom(geom) {
+    geomEpoch++;
     disposeCubies();
     // reset any layer pivot leftovers
     while (cubeGroup.children.length) cubeGroup.remove(cubeGroup.children[0]);
@@ -135,8 +139,13 @@ export function createRenderer(container, opts) {
       const axisVec = AXIS_VEC[turn.axis];
       const target = turn.quarters * (Math.PI / 2);
       const start = performance.now();
+      const epoch = geomEpoch;
 
       function frame(now) {
+        if (epoch !== geomEpoch) {
+          resolve(); // superseded: a different cube is on screen now
+          return;
+        }
         const t = Math.min(1, (now - start) / durationMs);
         // easeInOutCubic
         const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;

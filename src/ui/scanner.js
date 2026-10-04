@@ -5,6 +5,8 @@
 // to manual color entry — the rest of the flow is identical.
 
 export function createScanner({ video, gridN }) {
+  // Mutable so a cube-size switch re-targets a live camera without restarting it.
+  let grid = gridN;
   let stream = null;
   let track = null;
   let torchOn = false;
@@ -119,12 +121,12 @@ export function createScanner({ video, gridN }) {
     const side = Math.min(vw, vh) * 0.6;
     const x0 = (vw - side) / 2;
     const y0 = (vh - side) / 2;
-    const cell = side / gridN;
+    const cell = side / grid;
     const patch = Math.max(4, Math.floor(cell * 0.4));
 
     const out = [];
-    for (let r = 0; r < gridN; r++) {
-      for (let c = 0; c < gridN; c++) {
+    for (let r = 0; r < grid; r++) {
+      for (let c = 0; c < grid; c++) {
         const cx = x0 + cell * (c + 0.5);
         const cy = y0 + cell * (r + 0.5);
         const data = ctx.getImageData(
@@ -165,5 +167,9 @@ export function createScanner({ video, gridN }) {
     }
   }
 
-  return { start, stop, sample, isActive, hasTorch, setTorch, isTorchOn, facingMode };
+  function setGridN(n) {
+    grid = n;
+  }
+
+  return { start, stop, sample, setGridN, isActive, hasTorch, setTorch, isTorchOn, facingMode };
 }

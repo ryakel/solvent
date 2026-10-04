@@ -96,6 +96,18 @@ a { color: var(--c-blue); }
 }
 .size-btn[aria-pressed="true"] { color: var(--ink); border-color: var(--c-blue); background: var(--slate-3); }
 .size-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.header-btn {
+  font-family: var(--mono);
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.header-btn:hover { border-color: var(--ink-faint); }
 
 /* ---------- layout ---------- */
 main {
