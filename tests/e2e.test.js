@@ -304,19 +304,26 @@ const hexToRgb = (hex) => {
   return `rgb(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255})`;
 };
 
+// A camera-order grid as it appears in a left-for-right mirrored preview.
+function mirrorCols(cells, n) {
+  return cells.map((_, i) => cells[Math.floor(i / n) * n + (n - 1 - (i % n))]);
+}
+
 // Show the camera one face and wait until the live read-out over the reticle
-// reports exactly those colours, so the next capture samples this face.
-async function presentFace(page, mod, cells) {
+// reports exactly those colours where the user sees them (flipped when the
+// preview is mirrored), so the next capture samples this face.
+async function presentFace(page, mod, cells, { mirrored = false } = {}) {
   await page.evaluate(
     ({ hexes, n }) => window.__fakeCam.show(hexes, n),
     { hexes: cells.map((c) => mod.colorHex[c]), n: mod.gridN }
   );
+  const shown = mirrored ? mirrorCols(cells, mod.gridN) : cells;
   await page.waitForFunction(
     (want) => {
       const chips = [...document.querySelectorAll('#reticle .reticle-chip')];
       return chips.length === want.length && chips.every((c, i) => c.style.background === want[i]);
     },
-    cells.map((c) => hexToRgb(mod.colorHex[c])),
+    shown.map((c) => hexToRgb(mod.colorHex[c])),
     { timeout: 5000 }
   );
 }
@@ -589,6 +596,43 @@ test('tapping a move or Reset animation mid-turn never freezes the page', async 
     assert.equal(await page.evaluate(() => window.__solvent.getState().stepIndex), 1);
 
     assert.deepEqual(errors, [], 'page errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('with Mirror on, the live dots and read-back flip with the preview; stored stickers do not', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const s = scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'", 'F']);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(s));
+    const asymmetric = photos.find((p) => p.cells.join('') !== mirrorCols(p.cells, 2).join(''));
+    assert.ok(asymmetric, 'need a face whose columns differ');
+    const step = size2x2.scanSequence.findIndex((st) => st.face === asymmetric.face);
+    await page.click(`#face-progress .face-chip:nth-child(${step + 1})`);
+
+    // Mirror off: dots in the camera's own layout (presentFace waits for exactly that).
+    await presentFace(page, size2x2, asymmetric.cells);
+    await page.click('#btn-capture');
+    const plain = (await page.evaluate(() => window.__solvent.snapshot())).faces[asymmetric.face];
+
+    // Mirror on: the dots flip to sit over the stickers the user sees...
+    await page.click('#btn-mirror');
+    await page.click(`#face-progress .face-chip:nth-child(${step + 1})`);
+    await presentFace(page, size2x2, asymmetric.cells, { mirrored: true });
+    // ...the read-back of the stored face flips the same way...
+    const readback = await page.$$eval('#scan-readback-grid i', (els) => els.map((e) => e.style.background));
+    assert.deepEqual(readback, mirrorCols(asymmetric.cells, 2).map((c) => hexToRgb(size2x2.colorHex[c])));
+    // ...and a capture stores exactly the same stickers as without Mirror.
+    await page.click('#btn-capture');
+    const mirroredCapture = (await page.evaluate(() => window.__solvent.snapshot())).faces[asymmetric.face];
+    assert.deepEqual(mirroredCapture, plain);
+
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
     await context.close();
   } finally {
     await browser.close();

@@ -303,6 +303,15 @@ export function initApp() {
       chip.dataset.low = 'false';
     });
   }
+  // Where camera cell i is DRAWN. With Mirror on, the preview is flipped left-for-
+  // right, so whatever is drawn over it or beside it (live dots, read-back) must
+  // flip too. Only the drawing moves: samples and stored stickers stay in the
+  // camera's true frame, which is what the cube really looks like.
+  function shownAt(i) {
+    if (!mirror) return i;
+    const n = mod.current.gridN;
+    return Math.floor(i / n) * n + (n - 1 - (i % n));
+  }
   function liveTick() {
     if (!liveActive()) return;
     let samples;
@@ -316,7 +325,7 @@ export function initApp() {
     const detailed = typeof mod.current.classifyColorDetailed === 'function';
     const thr = mod.current.confidenceThreshold ?? 0.2;
     samples.forEach((rgb, i) => {
-      const chip = chips[i];
+      const chip = chips[shownAt(i)];
       if (!chip) return;
       let color, low;
       if (detailed) {
@@ -434,7 +443,7 @@ export function initApp() {
     const step = scanSeq().find((s) => s.face === f);
     const seen = faceToCamera(step && step.cameraToFacelet, faces[f]);
     [...grid.children].forEach((cell, i) => {
-      cell.style.background = mod.current.colorHex[seen[i]] || 'transparent';
+      cell.style.background = mod.current.colorHex[seen[shownAt(i)]] || 'transparent';
     });
   }
 
