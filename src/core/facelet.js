@@ -12,6 +12,7 @@
 import { FACES, FACE_ORDER, COLORS, SLOTS, solvedGeom } from './geometry.js';
 import { SOLVED, geomFromState, stateFromGeom, statesEqual } from './cube2.js';
 import { isMirror2, reflectXGeom, cornerHandedness } from './mirror2.js';
+import { issueList } from './issues.js';
 
 // A 2x2 has no centres, so a mirror-scheme (left-handed) cube is a real, solvable
 // cube — we accept and solve it. The note lets a user who actually mirrored a
@@ -100,85 +101,92 @@ const OPPOSITE = { W: 'Y', Y: 'W', G: 'B', B: 'G', R: 'O', O: 'R' };
 const COLOR_NAMES = { W: 'White', Y: 'Yellow', G: 'Green', B: 'Blue', R: 'Red', O: 'Orange' };
 
 // Validate a faces object as a physically real, solvable 2x2 cube. Returns
-// { ok, errors: string[] }. Messages are specific and actionable.
+// { ok, errors: string[], issues: [{ message, cells }] }. Messages are specific
+// and actionable; each issue also names the stickers it is about (core/issues.js)
+// so Verify can mark them on the net.
 export function validateFaces(faces) {
-  const errors = [];
+  const found = issueList();
+  const fail = () => ({ ok: false, errors: found.messages(), issues: found.issues() });
 
   // 1. Every sticker is a known color and every face has N*N of them.
-  let allFilled = true;
   for (const face of FACE_ORDER) {
     const arr = faces[face];
     if (!arr || arr.length !== N * N) {
-      errors.push(`Face ${face} is missing stickers.`);
-      allFilled = false;
+      found.add(`Face ${face} is missing stickers.`);
       continue;
     }
-    for (const c of arr) {
-      if (!COLORS.includes(c)) {
-        errors.push(`Face ${face} has an unset or unknown sticker.`);
-        allFilled = false;
-        break;
-      }
-    }
+    const unset = arr.map((c, i) => (COLORS.includes(c) ? -1 : i)).filter((i) => i >= 0);
+    if (unset.length) found.add(`Face ${face} has an unset or unknown sticker.`, unset.map((i) => [face, i]));
   }
-  if (!allFilled) return { ok: false, errors };
+  if (found.length) return fail();
 
-  // 2. Each color appears exactly N*N times (4 on a 2x2).
+  // 2. Each color appears exactly N*N times (4 on a 2x2). Too many of a colour
+  //    marks every sticker of it — one of those is the misread.
   const counts = Object.fromEntries(COLORS.map((c) => [c, 0]));
   for (const face of FACE_ORDER) for (const c of faces[face]) counts[c]++;
   for (const c of COLORS) {
     if (counts[c] !== N * N) {
-      errors.push(
-        `${COLOR_NAMES[c]} appears ${counts[c]} times; a real cube has exactly ${N * N}.`
-      );
+      const cells = [];
+      if (counts[c] > N * N) {
+        for (const face of FACE_ORDER) faces[face].forEach((x, i) => x === c && cells.push([face, i]));
+      }
+      found.add(`${COLOR_NAMES[c]} appears ${counts[c]} times; a real cube has exactly ${N * N}.`, cells);
     }
   }
 
   // 3. Each corner has three distinct, non-opposite colors and is a real piece.
   const cornerSets = [];
   const cornerCols = [];
+  const cornerCells = [];
   for (let j = 0; j < SLOTS.length; j++) {
     const slot = SLOTS[j];
     const cols = [];
+    const cells = [];
     for (let axis = 0; axis < 3; axis++) {
       const sign = slot.pos[axis];
       const face = FACE_ORDER.find((f) => FACES[f].axis === axis && FACES[f].sign === sign);
       const idx = FACELET_MAP[face].indexOf(j);
       cols.push(faces[face][idx]);
+      cells.push([face, idx]);
     }
     cornerCols.push(cols);
+    cornerCells.push(cells);
     const key = [...cols].sort().join('');
     cornerSets.push(key);
     const uniq = new Set(cols);
     if (uniq.size !== 3) {
-      errors.push(`The ${slot.name} corner repeats a color (${cols.join('/')}).`);
+      found.add(`The ${slot.name} corner repeats a color (${cols.join('/')}).`, cells);
     } else {
       for (const c of cols) {
         if (uniq.has(OPPOSITE[c])) {
-          errors.push(
-            `The ${slot.name} corner pairs opposite colors ${COLOR_NAMES[c]} and ${COLOR_NAMES[OPPOSITE[c]]}, which can't touch.`
+          found.add(
+            `The ${slot.name} corner pairs opposite colors ${COLOR_NAMES[c]} and ${COLOR_NAMES[OPPOSITE[c]]}, which can't touch.`,
+            cells
           );
           break;
         }
       }
       if (!REAL_CUBIE_SETS.has(key)) {
-        errors.push(`The ${slot.name} corner (${cols.join('/')}) is not a real cube piece.`);
+        found.add(`The ${slot.name} corner (${cols.join('/')}) is not a real cube piece.`, cells);
       }
     }
   }
 
   // 4. All 8 corners are distinct pieces (a permutation of the real set).
-  const seen = new Set();
+  const firstAt = new Map();
   for (let j = 0; j < cornerSets.length; j++) {
-    if (REAL_CUBIE_SETS.has(cornerSets[j])) {
-      if (seen.has(cornerSets[j])) {
-        errors.push(`Two corners are the same piece (${SLOTS[j].name} duplicates another).`);
-      }
-      seen.add(cornerSets[j]);
+    if (!REAL_CUBIE_SETS.has(cornerSets[j])) continue;
+    if (firstAt.has(cornerSets[j])) {
+      found.add(`Two corners are the same piece (${SLOTS[j].name} duplicates another).`, [
+        ...cornerCells[firstAt.get(cornerSets[j])],
+        ...cornerCells[j],
+      ]);
+    } else {
+      firstAt.set(cornerSets[j], j);
     }
   }
 
-  if (errors.length) return { ok: false, errors: dedupe(errors) };
+  if (found.length) return fail();
 
   // 5. Handedness: every corner's colors run the same way round — all standard
   //    pieces, or all mirror pieces (a mirror-scheme cube). A mix means stickers
@@ -190,38 +198,35 @@ export function validateFaces(faces) {
     const odd = mirrored <= hand.length / 2 ? -1 : 1;
     hand.forEach((h, j) => {
       if (h !== odd) return;
-      errors.push(
-        `The ${SLOTS[j].name} corner (${cornerCols[j].join('/')}) has two stickers swapped — its colors run the wrong way round.`
+      found.add(
+        `The ${SLOTS[j].name} corner (${cornerCols[j].join('/')}) has two stickers swapped — its colors run the wrong way round.`,
+        cornerCells[j]
       );
     });
-    return { ok: false, errors };
+    return fail();
   }
 
   // 6. Orientation parity: total corner twist must be 0 mod 3 (a single twisted
   //    corner is unsolvable). A 2x2 has no centres, so a globally left-handed
   //    (mirror) cube is real and solvable; the compact state can't encode its
   //    handedness, so we measure the twist in the correct frame — reflecting a
-  //    mirror cube into the standard frame first.
+  //    mirror cube into the standard frame first. No single corner is to blame,
+  //    so this finding marks no stickers.
   const mirror = isMirror2(geom);
   const state = stateFromGeom(mirror ? reflectXGeom(geom) : geom);
   const twist = state.co.reduce((a, b) => a + b, 0) % 3;
   if (twist !== 0) {
-    errors.push(
-      'One corner is twisted in place — the total twist is off. Re-check a corner whose colors look rotated.'
-    );
+    found.add('One corner is twisted in place — the total twist is off. Re-check a corner whose colors look rotated.');
+    return fail();
   }
 
-  const ok = errors.length === 0;
   return {
-    ok,
-    errors: dedupe(errors),
-    mirror: ok ? mirror : false,
-    warning: ok && mirror ? MIRROR_NOTE : null,
+    ok: true,
+    errors: [],
+    issues: [],
+    mirror,
+    warning: mirror ? MIRROR_NOTE : null,
   };
-}
-
-function dedupe(arr) {
-  return [...new Set(arr)];
 }
 
 // Parse a validated faces object into a solver state. Throws if invalid.

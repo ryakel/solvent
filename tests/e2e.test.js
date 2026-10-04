@@ -836,3 +836,49 @@ test('auto-capture shows its countdown ring, then captures on its own', async ()
     server.close();
   }
 });
+
+// ---- Verify points at the stickers to fix ---------------------------------------------
+
+test('Verify rings the stickers each finding is about, and clears them once fixed', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext();
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+
+    const good = scrambledFaces(['R', 'U', "F'", 'R2']);
+    // Swap two stickers of the URF corner (U bottom-right, F top-right).
+    const bad = JSON.parse(JSON.stringify(good));
+    [bad.U[3], bad.F[1]] = [bad.F[1], bad.U[3]];
+    await page.evaluate((f) => {
+      window.__solvent.goReview();
+      window.__solvent.setFaces(f);
+    }, bad);
+    const marks = () =>
+      page.$$eval('#net .sticker', (els) =>
+        Object.fromEntries(els.filter((e) => e.dataset.fix !== 'false').map((e) => [e.dataset.cell, e.dataset.fix]))
+      );
+    const ringed = await marks();
+    assert.deepEqual(Object.keys(ringed).sort(), ['F:1', 'R:0', 'U:3'], 'the URF corner is ringed');
+    assert.ok(Object.values(ringed).every((v) => v === 'true'));
+
+    // Pointing at the finding rings its stickers harder.
+    await page.hover('.validation__errs li[data-cells]');
+    assert.ok(Object.values(await marks()).every((v) => v === 'focus'));
+
+    // Fixed: nothing ringed, ready to solve.
+    await page.evaluate((f) => window.__solvent.setFaces(f), good);
+    assert.deepEqual(await marks(), {});
+    await page.waitForSelector('.validation__ok');
+
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

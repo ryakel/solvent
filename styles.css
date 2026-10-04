@@ -705,6 +705,22 @@ h1 {
   50%      { box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px rgba(245, 197, 24, 1); }
 }
 
+/* A sticker a validation finding is about: a red ring, the "fix this"
+   counterpart to the amber recheck ring (and it wins over it). The finding being
+   pointed at or tapped rings its stickers harder. */
+.sticker[data-fix="true"] {
+  animation: none;
+  box-shadow: 0 0 0 1px var(--slate), 0 0 0 3px var(--c-red);
+}
+.sticker[data-fix="focus"] {
+  animation: none;
+  box-shadow: 0 0 0 1px var(--slate), 0 0 0 4px var(--c-red), 0 0 14px rgba(229, 72, 77, 0.65);
+  transform: scale(1.06);
+}
+.validation__hint { margin: 0 0 8px; font-size: 13px; color: var(--ink-dim); }
+.validation__errs li[data-cells] { cursor: pointer; }
+.validation__errs li[data-cells]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
 /* Verify-screen uncertainty summary. Amber-keyed and clearly not the red error
    box — a "look here," paired with the on-net highlights. */
 .uncertain-note {

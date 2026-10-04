@@ -651,6 +651,7 @@ export function initApp() {
       grid.style.gridTemplateColumns = `repeat(${mod.current.gridN}, 1fr)`;
       for (let i = 0; i < mod.current.gridN * mod.current.gridN; i++) {
         const st = el('button', 'sticker');
+        st.dataset.cell = `${f}:${i}`;
         markSticker(st, f, i);
         st.addEventListener('click', () => {
           faces[f][i] = paintColor;
@@ -720,11 +721,25 @@ export function initApp() {
       `${n} face${n > 1 ? 's' : ''} look${n > 1 ? '' : 's'} uncertain — the flagged ` +
       `stickers are highlighted below. Tap any to confirm or repaint it.`;
   }
+  // Mark the stickers the current findings are about: a red ring on every one,
+  // and a stronger one on the finding being hovered, focused or tapped. The
+  // user fixes stickers, not "the URF corner" — so point at the stickers.
+  function markFixes(issues, focus = null) {
+    const all = new Set();
+    for (const it of issues) for (const [f, i] of it.cells || []) all.add(`${f}:${i}`);
+    const focused = new Set((focus && focus.cells ? focus.cells : []).map(([f, i]) => `${f}:${i}`));
+    for (const st of $('#net').querySelectorAll('.sticker')) {
+      const k = st.dataset.cell;
+      st.dataset.fix = focused.has(k) ? 'focus' : all.has(k) ? 'true' : 'false';
+    }
+  }
+
   function validateNow() {
     updateUncertainNote();
     const box = $('#validation');
     const solveBtn = $('#btn-solve');
     if (!allFilled()) {
+      markFixes([]);
       box.innerHTML = '';
       const div = el('div', 'validation__errs');
       div.appendChild(el('h2', null, 'Fill in every sticker'));
@@ -736,7 +751,9 @@ export function initApp() {
       solveBtn.disabled = true;
       return false;
     }
-    const { ok, errors, mirror, warning } = mod.current.validate(faces);
+    const { ok, errors, issues: found, mirror, warning } = mod.current.validate(faces);
+    const issues = found && found.length ? found : errors.map((message) => ({ message, cells: [] }));
+    markFixes(ok ? [] : issues);
     box.innerHTML = '';
     if (ok) {
       const div = el('div', 'validation__ok', 'This is a real, solvable cube. Ready to solve.');
@@ -747,9 +764,28 @@ export function initApp() {
       solveBtn.disabled = false;
     } else {
       const div = el('div', 'validation__errs');
-      div.appendChild(el('h2', null, `${errors.length} thing${errors.length > 1 ? 's' : ''} to fix`));
+      div.appendChild(el('h2', null, `${issues.length} thing${issues.length > 1 ? 's' : ''} to fix`));
+      if (issues.some((it) => it.cells && it.cells.length)) {
+        div.appendChild(
+          el('p', 'validation__hint', 'The stickers involved are ringed in red above — point at or tap a line to see its stickers.')
+        );
+      }
       const ul = el('ul');
-      for (const e of errors) ul.appendChild(el('li', null, e));
+      for (const it of issues) {
+        const li = el('li', null, it.message);
+        if (it.cells && it.cells.length) {
+          li.tabIndex = 0;
+          li.dataset.cells = String(it.cells.length);
+          const on = () => markFixes(issues, it);
+          const off = () => markFixes(issues);
+          li.addEventListener('mouseenter', on);
+          li.addEventListener('focus', on);
+          li.addEventListener('click', on);
+          li.addEventListener('mouseleave', off);
+          li.addEventListener('blur', off);
+        }
+        ul.appendChild(li);
+      }
       div.appendChild(ul);
       box.appendChild(div);
       solveBtn.disabled = true;
