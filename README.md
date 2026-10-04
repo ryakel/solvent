@@ -67,6 +67,10 @@ npm run test:unit  # just the deterministic core/solver tests (no browser)
 npm run test:e2e   # just the headless browser test
 ```
 
+CI runs the full suite on every pull request (`.github/workflows/test.yml`), and
+the Pages deploy runs it first — a red suite never ships. Outside the cloud dev
+image, install Playwright's browser once with `npx playwright install chromium`.
+
 ## Run it locally
 
 No build step. Serve the folder over HTTP (the camera API needs a secure context

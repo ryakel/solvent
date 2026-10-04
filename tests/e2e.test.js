@@ -1,6 +1,7 @@
 // e2e.test.js — headless browser test of the real built site, served under a
 // /solvent/ subpath to mimic GitHub Pages. Covers DoD #3, #4, #7.
 import { test } from 'node:test';
+import { existsSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
@@ -12,7 +13,10 @@ import size3x3 from '../src/sizes/size3x3.js';
 import * as cube3 from '../src/core/cube3.js';
 import { scanPhotos } from './virtual-camera.js';
 
-const EXE = '/opt/pw-browsers/chromium';
+// The cloud dev image ships Chromium here; anywhere else (CI, a laptop) fall back
+// to the browser Playwright downloaded itself.
+const DEV_IMAGE_CHROMIUM = '/opt/pw-browsers/chromium';
+const EXE = existsSync(DEV_IMAGE_CHROMIUM) ? DEV_IMAGE_CHROMIUM : undefined;
 const BASE = '/solvent';
 
 function startServer() {
