@@ -748,6 +748,14 @@ test('the guide cube shows the stickers scanned so far, and the next turn sweeps
       // Exactly the faces captured so far are painted, in their scanned colours.
       assert.deepEqual(s.guideColors, expectedGuide(size2x2, s.faces), `guide colours after capture ${k + 1}`);
       cues.push(s.turnCue);
+      // The arrow is a straight sweep across the face in that direction, never a
+      // curved arc in the plane of the screen (which reads as "spin the face").
+      const d = await page.getAttribute('#turn-cue .turn-cue__line', 'd');
+      const m = d.match(/^M ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+)$/);
+      assert.ok(m, `cue path is a straight line: ${d}`);
+      const [x1, y1, x2, y2] = m.slice(1).map(Number);
+      const dir = { left: x2 < x1 && y1 === y2, right: x2 > x1 && y1 === y2, down: y2 > y1 && x1 === x2, up: y2 < y1 && x1 === x2 };
+      assert.ok(dir[s.turnCue], `cue ${s.turnCue} drawn as ${d}`);
       if (k === 1) {
         // Turning Mirror on re-points the cue already on screen...
         await page.click('#btn-mirror');
@@ -1262,6 +1270,153 @@ test('every Verify edit is undoable — a paint, Reset cube, a fix', async () =>
     assert.ok(await undoDisabled());
 
     assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+// ---- "not sure what colour this is": ask, learn, stop asking (SOLV-22) -----------------------
+
+// A lime green the classifier can't place: hue ~101°, halfway between its Yellow
+// and Green references.
+const UNSURE_LIME = '#5adc1e';
+const limeGreens = (cells) => cells.map((c) => (c === 'G' ? UNSURE_LIME : size2x2.colorHex[c]));
+
+async function showRaw(page, hexes) {
+  await page.evaluate((h) => window.__fakeCam.show(h, 2), hexes);
+  await page.waitForTimeout(450); // let the live read-out see the new face
+}
+
+test('not sure of a colour: Solvent asks once per look-alike group, learns it, and stops asking', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const snap = () => page.evaluate(() => window.__solvent.snapshot());
+    const s = scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'", 'F']);
+    const truth = size2x2.faceColorsFromState(s);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(s));
+    let asked = 0;
+    for (const [k, { cells }] of photos.entries()) {
+      await showRaw(page, limeGreens(cells));
+      const live = await page.$$eval('#reticle .reticle-chip', (els) => els.map((e) => e.textContent));
+      await page.click('#btn-capture');
+      const greens = cells.flatMap((c, i) => (c === 'G' ? [i] : []));
+      const now = await snap();
+      if (!asked && greens.length) {
+        // The first face with green: held on one question about exactly those stickers.
+        assert.ok(live.some((t) => t === '?'), 'the live dots said "?" before capture');
+        assert.deepEqual(now.asking, { face: photos[k].face, cells: greens, groups: 1 });
+        assert.equal(now.captureIndex, k, 'the step is held');
+        const marks = await page.$$eval('#scan-readback-grid i', (els) => els.map((e) => e.textContent));
+        assert.deepEqual(marks, cells.map((c) => (c === 'G' ? '?' : '')), 'the read-back marks them ?');
+        assert.equal(await page.getAttribute('#colour-ask-choices .is-guess', 'data-color'), 'G', 'best guess first');
+        await page.click('#colour-ask-choices [data-color="G"]');
+        asked++;
+        assert.deepEqual((await snap()).learned, ['G']);
+      } else {
+        assert.equal(now.asking, null, `face ${k + 1}: a learned colour is not asked about again`);
+      }
+    }
+    assert.equal(asked, 1, 'one question for the whole cube');
+    await page.waitForSelector('#screen-review.is-active');
+    const done = await snap();
+    assert.deepEqual(done.faces, truth);
+    for (const f of size2x2.faceOrder) assert.ok(done.lowConf[f].every((x) => !x), `${f}: answered stickers are not ringed`);
+
+    // A new cube may have different colours: everything learned is forgotten.
+    await page.click('#btn-new-cube');
+    await page.waitForFunction(() => window.__solvent.snapshot().captureIndex === 0);
+    assert.deepEqual((await snap()).learned, []);
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('Skip keeps Solvent\'s guesses and rings them at Verify', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const s = scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'", 'F']);
+    const truth = size2x2.faceColorsFromState(s);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(s));
+    for (const { cells } of photos) {
+      await showRaw(page, limeGreens(cells));
+      await page.click('#btn-capture');
+      if (await page.evaluate(() => !!window.__solvent.snapshot().asking)) await page.click('#btn-ask-skip');
+      if (await page.$eval('#capture-warning', (n) => !n.hidden)) await page.click('#btn-warn-keep');
+    }
+    await page.waitForSelector('#screen-review.is-active');
+    const snap = await page.evaluate(() => window.__solvent.snapshot());
+    assert.deepEqual(snap.learned, [], 'skipping teaches nothing');
+    for (const f of size2x2.faceOrder) {
+      assert.deepEqual(snap.lowConf[f], truth[f].map((c) => c === 'G'), `${f}: exactly the kept guesses are ringed`);
+    }
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+// ---- Non-standard colors: a knockoff cube (SOLV-21) ------------------------------------------
+
+// Ryan's knockoff 3x3, measured from his photo. Its lime green reads as yellow to
+// the standard classifier; its coral red sits on the red/orange line. Blue wasn't
+// in the photo: a typical knockoff blue.
+const KNOCKOFF_HEX = { W: '#effef2', Y: '#fef300', G: '#73db00', R: '#ff6546', O: '#ff5600', B: '#1e6ee6' };
+
+test('Non-standard colors: a knockoff cube scans by asking once per colour, then reaches Verify as the true cube', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const snap = () => page.evaluate(() => window.__solvent.snapshot());
+    await page.click('.size-btn:nth-child(2)');
+    await page.waitForFunction(() => window.__solvent.snapshot().size === '3x3');
+    await page.click('#btn-colors');
+    assert.equal(await page.textContent('#btn-colors'), 'Colors: non-standard');
+    assert.equal((await snap()).nonStandard, true);
+
+    const s = scrambleState(cube3, ['R', 'U', "F'", 'L2', "D'", 'B', 'R2', "U'"]);
+    const truth = size3x3.faceColorsFromState(s);
+    const photos = scanPhotos(size3x3.scanSequence, size3x3.geomFromState(s));
+    const asked = [];
+    for (const { cells } of photos) {
+      await page.evaluate((h) => window.__fakeCam.show(h, 3), cells.map((c) => KNOCKOFF_HEX[c]));
+      await page.waitForTimeout(450);
+      await page.click('#btn-capture');
+      // Answer every question the way Ryan would: the colour those stickers really are.
+      for (let q = 0; q < 10; q++) {
+        const a = (await snap()).asking;
+        if (!a) break;
+        const colours = new Set(a.cells.map((k) => cells[k]));
+        assert.equal(colours.size, 1, `a question groups only look-alike stickers: ${[...colours]}`);
+        const [c] = colours;
+        asked.push(c);
+        await page.click(`#colour-ask-choices [data-color="${c}"]`);
+      }
+      assert.ok(await page.$eval('#capture-warning', (n) => n.hidden), 'no capture warning while colours are being learned');
+    }
+    assert.deepEqual([...asked].sort(), ['B', 'G', 'O', 'R', 'W', 'Y'], 'one question per colour, each colour once');
+    await page.waitForSelector('#screen-review.is-active');
+    await page.waitForSelector('.validation__ok');
+    assert.deepEqual((await snap()).faces, truth, 'the true cube');
+
+    // The switch describes the kind of cube, and is kept for the next one.
+    await page.click('#btn-new-cube');
+    await page.waitForFunction(() => window.__solvent.snapshot().captureIndex === 0);
+    const fresh = await snap();
+    assert.equal(fresh.nonStandard, true);
+    assert.deepEqual(fresh.learned, [], 'but its colours are forgotten');
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
     await context.close();
   } finally {
     await browser.close();

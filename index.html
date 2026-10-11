@@ -69,7 +69,7 @@
               </defs>
               <path class="turn-cue__under" data-line pathLength="100" />
               <path class="turn-cue__line" data-line pathLength="100" marker-end="url(#turn-cue-head)" />
-              <text class="turn-cue__label" x="90" y="53" text-anchor="middle"></text>
+              <text class="turn-cue__label" x="62" y="70" text-anchor="middle"></text>
             </svg>
             <!-- Auto-capture countdown ring: appears only when the "Auto" assist is
                  on and the frame has held steady + confident. Drawn over the reticle. -->
@@ -86,8 +86,8 @@
             </div>
             <div class="camera-msg" id="camera-msg" hidden></div>
             <div class="live-legend" id="live-legend" aria-hidden="true">
-              Dots show the colors Solvent reads. Add light or change the angle
-              until they match your cube, then Capture.
+              Dots show the colors Solvent reads; ? means it isn't sure and will
+              ask you. Add light or change the angle, then Capture.
             </div>
           </div>
 
@@ -130,6 +130,15 @@
                 <button class="btn btn--ghost" id="btn-warn-keep" type="button">Keep it</button>
               </div>
             </div>
+            <!-- "Not sure what colour this is": Solvent holds a capture and asks about the
+                 stickers it can't read (marked ? in the Scanned grid), learning the answers
+                 for the rest of this cube. -->
+            <div class="colour-ask" id="colour-ask" role="group" aria-labelledby="colour-ask-text" hidden>
+              <p class="colour-ask__text" id="colour-ask-text" role="status"></p>
+              <p class="colour-ask__hint" id="colour-ask-hint"></p>
+              <div class="colour-ask__choices" id="colour-ask-choices"></div>
+              <button class="btn btn--ghost" id="btn-ask-skip" type="button">Skip: keep Solvent's guess</button>
+            </div>
             <div class="mirror-nudge" id="mirror-nudge" hidden role="note">
               <span>Using a selfie camera? Tap <b>Mirror</b> to flip the turn directions.</span>
               <button class="mirror-nudge__x" id="btn-mirror-nudge-dismiss" type="button" aria-label="Dismiss selfie camera hint">×</button>
@@ -137,6 +146,7 @@
             <div class="capture-actions">
               <button class="btn" id="btn-flash" aria-pressed="false" hidden>Flash off</button>
               <button class="btn" id="btn-mirror" aria-pressed="false" title="Turn on if you are scanning with a front / selfie camera — it flips the turn directions to match the mirrored preview.">Mirror: off</button>
+              <button class="btn" id="btn-colors" aria-pressed="false" title="Turn on for a cube whose colors aren't the standard shades (a lime green, a coral red). Solvent stops guessing from standard colors: it asks the first time it sees each color and learns your cube's colors as you scan.">Colors: standard</button>
             </div>
             <div class="capture-actions capture-assist">
               <button class="btn" id="btn-auto" aria-pressed="false" title="Assistive: when on, Solvent captures the face automatically once it holds steady and the colors read cleanly. Manual capture always works.">Auto: off</button>
