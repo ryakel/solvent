@@ -1276,3 +1276,92 @@ test('every Verify edit is undoable — a paint, Reset cube, a fix', async () =>
     server.close();
   }
 });
+
+// ---- "not sure what colour this is": ask, learn, stop asking (SOLV-22) -----------------------
+
+// A lime green the classifier can't place: hue ~101°, halfway between its Yellow
+// and Green references.
+const UNSURE_LIME = '#5adc1e';
+const limeGreens = (cells) => cells.map((c) => (c === 'G' ? UNSURE_LIME : size2x2.colorHex[c]));
+
+async function showRaw(page, hexes) {
+  await page.evaluate((h) => window.__fakeCam.show(h, 2), hexes);
+  await page.waitForTimeout(450); // let the live read-out see the new face
+}
+
+test('not sure of a colour: Solvent asks once per look-alike group, learns it, and stops asking', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const snap = () => page.evaluate(() => window.__solvent.snapshot());
+    const s = scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'", 'F']);
+    const truth = size2x2.faceColorsFromState(s);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(s));
+    let asked = 0;
+    for (const [k, { cells }] of photos.entries()) {
+      await showRaw(page, limeGreens(cells));
+      const live = await page.$$eval('#reticle .reticle-chip', (els) => els.map((e) => e.textContent));
+      await page.click('#btn-capture');
+      const greens = cells.flatMap((c, i) => (c === 'G' ? [i] : []));
+      const now = await snap();
+      if (!asked && greens.length) {
+        // The first face with green: held on one question about exactly those stickers.
+        assert.ok(live.some((t) => t === '?'), 'the live dots said "?" before capture');
+        assert.deepEqual(now.asking, { face: photos[k].face, cells: greens, groups: 1 });
+        assert.equal(now.captureIndex, k, 'the step is held');
+        const marks = await page.$$eval('#scan-readback-grid i', (els) => els.map((e) => e.textContent));
+        assert.deepEqual(marks, cells.map((c) => (c === 'G' ? '?' : '')), 'the read-back marks them ?');
+        assert.equal(await page.getAttribute('#colour-ask-choices .is-guess', 'data-color'), 'G', 'best guess first');
+        await page.click('#colour-ask-choices [data-color="G"]');
+        asked++;
+        assert.deepEqual((await snap()).learned, ['G']);
+      } else {
+        assert.equal(now.asking, null, `face ${k + 1}: a learned colour is not asked about again`);
+      }
+    }
+    assert.equal(asked, 1, 'one question for the whole cube');
+    await page.waitForSelector('#screen-review.is-active');
+    const done = await snap();
+    assert.deepEqual(done.faces, truth);
+    for (const f of size2x2.faceOrder) assert.ok(done.lowConf[f].every((x) => !x), `${f}: answered stickers are not ringed`);
+
+    // A new cube may have different colours: everything learned is forgotten.
+    await page.click('#btn-new-cube');
+    await page.waitForFunction(() => window.__solvent.snapshot().captureIndex === 0);
+    assert.deepEqual((await snap()).learned, []);
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('Skip keeps Solvent\'s guesses and rings them at Verify', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const s = scrambleState(cube2, ['R', 'U', "F'", 'R2', "U'", 'F']);
+    const truth = size2x2.faceColorsFromState(s);
+    const photos = scanPhotos(size2x2.scanSequence, size2x2.geomFromState(s));
+    for (const { cells } of photos) {
+      await showRaw(page, limeGreens(cells));
+      await page.click('#btn-capture');
+      if (await page.evaluate(() => !!window.__solvent.snapshot().asking)) await page.click('#btn-ask-skip');
+      if (await page.$eval('#capture-warning', (n) => !n.hidden)) await page.click('#btn-warn-keep');
+    }
+    await page.waitForSelector('#screen-review.is-active');
+    const snap = await page.evaluate(() => window.__solvent.snapshot());
+    assert.deepEqual(snap.learned, [], 'skipping teaches nothing');
+    for (const f of size2x2.faceOrder) {
+      assert.deepEqual(snap.lowConf[f], truth[f].map((c) => c === 'G'), `${f}: exactly the kept guesses are ringed`);
+    }
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

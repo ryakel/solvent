@@ -260,9 +260,17 @@ h1 {
   transition: opacity 120ms ease, background 120ms ease;
 }
 .reticle.live .reticle-chip { opacity: 1; }
+/* Not sure: ringed amber with a "?" — Solvent will ask about it on capture. */
 .reticle.live .reticle-chip[data-low="true"] {
-  opacity: 0.55;
+  opacity: 0.9;
   box-shadow: 0 0 0 1.5px var(--c-yellow);
+}
+.reticle-chip {
+  display: grid;
+  place-items: center;
+  font: 700 11px/1 var(--mono);
+  color: #fff;
+  text-shadow: 0 0 2px #000, 0 0 2px #000;
 }
 .live-legend {
   position: absolute;
@@ -536,12 +544,20 @@ h1 {
   background: var(--slate);
 }
 .scan-readback__grid i {
-  display: block;
+  display: grid;
+  place-items: center;
   width: 15px;
   height: 15px;
   border-radius: 2px;
   border: 1px solid rgba(0, 0, 0, 0.35);
+  font: 700 12px/1 var(--mono);
+  color: #fff;
+  text-shadow: 0 0 2px #000, 0 0 2px #000;
 }
+/* While Solvent asks about this face, the grid grows so the ? marks read. */
+.scan-readback.is-asking .scan-readback__grid i { width: 30px; height: 30px; }
+.scan-readback__grid i[data-ask="now"] { outline: 2px solid var(--c-yellow); outline-offset: 1px; }
+.scan-readback__grid i[data-ask="later"] { opacity: 0.55; }
 
 .face-progress { display: flex; gap: 8px; flex-wrap: wrap; }
 .face-chip {
@@ -640,6 +656,21 @@ h1 {
 .capture-warning__text { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink); font-weight: 600; }
 .capture-warning__hint { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-dim); }
 .capture-warning__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* "What colour is this?" — same amber family as the capture warning: look again. */
+.colour-ask {
+  border: 1px solid rgba(245, 197, 24, 0.45);
+  border-left: 3px solid var(--c-yellow);
+  background: rgba(245, 197, 24, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.colour-ask__text { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink); font-weight: 600; }
+.colour-ask__hint { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-dim); }
+.colour-ask__choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
+.colour-ask__choice { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-width: 0; }
+.colour-ask__choice.is-guess { border-color: var(--ink); }
+.colour-ask__swatch { flex: none; width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.35); }
 
 /* ---------- review / net ---------- */
 .palette {

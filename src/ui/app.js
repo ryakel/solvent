@@ -8,6 +8,7 @@ import { createGuide } from './guide.js';
 import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
 import { findRepair, applyRepair, rotateGrid } from '../sizes/repair.js';
 import { calibrateLabels } from '../core/calibrate.js';
+import { createColourMemory, lookAlikeGroups } from '../core/colourmemory.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 // Show/hide by the `hidden` ATTRIBUTE. `el.hidden = …` only works on HTML
@@ -82,6 +83,11 @@ export function initApp() {
   // there's no sample (not scanned, or painted by hand — hand paint is ground
   // truth). Lets Verify re-read colours against the cube's own stickers.
   let rawRgb = emptyRaw();
+  // Colours the user taught Solvent for THIS cube by answering "what colour is
+  // this?" at capture (core/colourmemory.js). Forgotten on New cube.
+  const memory = createColourMemory();
+  // A capture held on that question (see askColours), or null.
+  let asking = null;
   let paintColor = mod.current.colors[0];
   let captureIndex = 0;
   let scanner = null;
@@ -447,24 +453,17 @@ export function initApp() {
     }
     if (!samples || !samples.length) return;
     const chips = $('#reticle').querySelectorAll('.reticle-chip');
-    const detailed = typeof mod.current.classifyColorDetailed === 'function';
-    const thr = mod.current.confidenceThreshold ?? 0.2;
     const view = [];
     samples.forEach((rgb, i) => {
       const chip = chips[shownAt(i)];
-      let color, low;
-      if (detailed) {
-        const d = mod.current.classifyColorDetailed(rgb);
-        color = d.color;
-        low = d.confidence < thr;
-      } else {
-        color = mod.current.classifyColor(rgb);
-        low = false;
-      }
-      view.push(color);
+      // The motion signal stays on the plain classifier, so learning a colour
+      // mid-scan never looks like the cube moved.
+      view.push(mod.current.classifyColor(rgb));
       if (!chip) return;
-      chip.style.background = mod.current.colorHex[color];
-      chip.dataset.low = low ? 'true' : 'false';
+      const r = readSticker(rgb);
+      chip.style.background = mod.current.colorHex[r.guess];
+      chip.dataset.low = r.colour ? 'false' : 'true';
+      chip.textContent = r.colour ? '' : '?';
     });
     noteLiveView(view);
     $('#reticle').classList.add('live');
@@ -536,6 +535,7 @@ export function initApp() {
   function updateCaptureTarget() {
     const seq = scanSeq();
     const step = seq[captureIndex];
+    if (asking && asking.step !== step) endAsking();
     const f = step.face;
     // Re-derive the label/text from the turn so the wording flips with mirror.
     const { label, text } = mod.current.describeScanStep(step.turn, step.face, {
@@ -610,6 +610,8 @@ export function initApp() {
     const wrap = $('#scan-readback');
     const grid = $('#scan-readback-grid');
     if (!wrap || !grid) return;
+    wrap.classList.toggle('is-asking', !!asking && asking.step.face === f);
+    if (asking && asking.step.face === f) return renderAsk(grid);
     if (!isFaceFilled(f)) {
       wrap.hidden = true;
       return;
@@ -627,8 +629,33 @@ export function initApp() {
     const seen = faceToCamera(step && step.cameraToFacelet, faces[f]);
     [...grid.children].forEach((cell, i) => {
       cell.style.background = mod.current.colorHex[seen[shownAt(i)]] || 'transparent';
+      cell.textContent = '';
+      delete cell.dataset.ask;
     });
   }
+  // The capture being asked about, as the camera saw it: settled stickers in their
+  // colour, unsure ones in the camera's own colour with a "?", the ones asked
+  // about right now outlined.
+  function renderAsk(grid) {
+    const wrap = $('#scan-readback');
+    wrap.hidden = false;
+    const n = mod.current.gridN;
+    grid.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
+    if (grid.children.length !== n * n) {
+      grid.innerHTML = '';
+      for (let i = 0; i < n * n; i++) grid.appendChild(el('i'));
+    }
+    const now = new Set(asking.groups[0]);
+    [...grid.children].forEach((cell, i) => {
+      const k = shownAt(i);
+      const c = asking.labels[k];
+      cell.style.background = c ? mod.current.colorHex[c] : rgbCss(asking.samples[k]);
+      cell.textContent = c ? '' : '?';
+      if (c) delete cell.dataset.ask;
+      else cell.dataset.ask = now.has(k) ? 'now' : 'later';
+    });
+  }
+  const rgbCss = ([r, g, b]) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
 
   // The guide shows THIS cube: stickers scanned so far in their real colours,
   // the rest "not scanned yet". A 3x3's unscanned centres show the colours the
@@ -1168,35 +1195,58 @@ export function initApp() {
   }
 
   // The single capture path shared by the manual button and the auto-capture
-  // assist. Samples the reticle, classifies with a confidence margin, advances to
-  // the next unfilled face, and fires the confirmation feedback. Returns true if a
-  // face was recorded. Guarded so it is a no-op without a live camera frame.
+  // assist. Samples the reticle and reads every sticker. Anything Solvent isn't
+  // sure of holds the step on a question (askColours); otherwise the face is
+  // recorded, checked and the scan moves on. Returns true if the capture was
+  // taken. Guarded so it is a no-op without a live camera frame.
   function commitCapture() {
     if (!scanner || !scanner.isActive()) return false;
     const samples = scanner.sample();
     if (!samples) return false;
-    const step = scanSeq()[captureIndex];
+    const reads = samples.map(readSticker);
+    const capture = {
+      step: scanSeq()[captureIndex],
+      samples,
+      labels: reads.map((r) => r.colour),
+      guesses: reads.map((r) => r.guess),
+      // The motion signal, judged now, not after any questions are answered.
+      view: samples.map((rgb) => mod.current.classifyColor(rgb)),
+      unchanged: lastCaptureView !== null && !viewChanged,
+    };
+    dismissMirrorNudge();
+    const unsure = reads.flatMap((r, k) => (r.colour ? [] : [k]));
+    if (unsure.length) askColours(capture, unsure);
+    else recordCapture(capture);
+    return true;
+  }
+
+  // What Solvent makes of one camera sample: { colour, guess }. colour is null
+  // when it isn't sure (then it asks); guess is its best bet either way. A colour
+  // the user taught for this cube wins; otherwise the size's classifier, trusted
+  // only above its confidence threshold.
+  function readSticker(rgb) {
+    const m = memory.recall(rgb);
+    if (m.colour) return { colour: m.colour, guess: m.colour };
+    if (typeof mod.current.classifyColorDetailed !== 'function') {
+      const c = mod.current.classifyColor(rgb);
+      return { colour: c, guess: c };
+    }
+    const d = mod.current.classifyColorDetailed(rgb);
+    const sure = d.confidence >= (mod.current.confidenceThreshold ?? 0);
+    return { colour: sure ? d.color : null, guess: d.color };
+  }
+
+  // Store a capture (camera order) as its step's face, check it fits with the
+  // faces already captured, and move on. `kept` marks stickers whose guess the
+  // user chose to keep without answering — ringed for a recheck at Verify.
+  function recordCapture({ step, samples, labels, view, unchanged, kept = [] }) {
     const f = step.face;
     // The camera reads cells in its own frame; re-seat them onto the facelet grid
-    // (U and D arrive rotated — see sizes/scanpath.js).
+    // (some faces arrive rotated — see sizes/scanpath.js).
     const seat = (cells) => cameraToFace(step.cameraToFacelet, cells);
-    // Classify with a confidence margin when the module supports it, so genuinely
-    // ambiguous reads get flagged for a recheck at Verify. Falls back cleanly to
-    // the plain classifier (and no flags) for a module that doesn't opt in.
-    const thr = mod.current.confidenceThreshold ?? 0;
-    let view;
-    if (typeof mod.current.classifyColorDetailed === 'function') {
-      const detailed = samples.map((rgb) => mod.current.classifyColorDetailed(rgb));
-      view = detailed.map((d) => d.color);
-      faces[f] = seat(view);
-      lowConf[f] = seat(detailed.map((d) => d.confidence < thr));
-    } else {
-      view = samples.map((rgb) => mod.current.classifyColor(rgb));
-      faces[f] = seat(view);
-      lowConf[f] = faces[f].map(() => false);
-    }
+    faces[f] = seat(labels);
+    lowConf[f] = seat(labels.map((_, k) => kept.includes(k)));
     rawRgb[f] = seat(samples);
-    dismissMirrorNudge();
     if (rescanning === f) {
       const k = rescanTurn(f, faces[f]);
       faces[f] = rotateGrid(faces[f], mod.current.gridN, k);
@@ -1206,7 +1256,6 @@ export function initApp() {
 
     // Does this face fit with the ones already captured? If not, hold the step
     // and say why, rather than letting a wrong turn surface six faces later.
-    const unchanged = lastCaptureView !== null && !viewChanged;
     rescanBase = lastCaptureView;
     lastCaptureView = view;
     viewChanged = false;
@@ -1216,13 +1265,87 @@ export function initApp() {
       showCaptureWarning(problem, unchanged);
       updateCaptureTarget();
       confirmFeedback('warn');
-      return true;
+      return;
     }
     hideCaptureWarning();
     if (rescanning === f) finishRescan();
     else advanceAfterCapture();
-    return true;
   }
+
+  // ---- "not sure what colour this is" -----------------------------------------
+  // Hold the capture and ask about the stickers Solvent isn't sure of, one
+  // look-alike group at a time, its best guess first. Each answer is learned for
+  // this cube (core/colourmemory.js), so it can settle the rest of the face and
+  // later faces without asking again. Skip keeps the guesses, ringed at Verify.
+  function askColours(capture, unsure) {
+    resetAutoProgress(); // auto-capture waits while a question is open (autoTick)
+    hideCaptureWarning();
+    hideTurnCue();
+    asking = { ...capture, groups: lookAlikeGroups(capture.samples, unsure) };
+    showQuestion();
+    confirmFeedback('warn');
+  }
+  function showQuestion() {
+    const group = asking.groups[0];
+    const more = asking.groups.length - 1;
+    $('#colour-ask-text').textContent =
+      group.length === 1
+        ? "Not sure what color the sticker marked ? is."
+        : `Not sure what color the ${group.length} stickers marked ? are. They look alike.`;
+    $('#colour-ask-hint').textContent =
+      'Which color is it on your cube? Solvent will remember for the rest of this cube.' +
+      (more ? ` Then ${more} more to check.` : '');
+    // Best guess first: one tap when Solvent was nearly right.
+    const votes = new Map();
+    for (const i of group) votes.set(asking.guesses[i], (votes.get(asking.guesses[i]) || 0) + 1);
+    const guess = [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const box = $('#colour-ask-choices');
+    box.innerHTML = '';
+    for (const c of [guess, ...mod.current.colors.filter((x) => x !== guess)]) {
+      const b = el('button', 'btn colour-ask__choice' + (c === guess ? ' is-guess' : ''));
+      b.type = 'button';
+      b.dataset.color = c;
+      const sw = el('span', 'colour-ask__swatch');
+      sw.style.background = mod.current.colorHex[c];
+      b.append(sw, el('span', null, mod.current.colorNames[c]));
+      b.addEventListener('click', () => answerColour(c));
+      box.appendChild(b);
+    }
+    $('#colour-ask').hidden = false;
+    renderReadback(asking.step.face);
+  }
+  function answerColour(c) {
+    if (!asking) return;
+    const { samples, labels } = asking;
+    for (const i of asking.groups[0]) {
+      memory.teach(samples[i], c);
+      labels[i] = c;
+    }
+    // What was just learned may settle the rest of this face.
+    labels.forEach((x, i) => {
+      if (x == null) labels[i] = memory.recall(samples[i]).colour;
+    });
+    asking.groups = asking.groups.map((g) => g.filter((i) => labels[i] == null)).filter((g) => g.length);
+    if (asking.groups.length) {
+      showQuestion();
+      return;
+    }
+    const capture = asking;
+    endAsking();
+    recordCapture(capture);
+  }
+  function endAsking() {
+    asking = null;
+    $('#colour-ask').hidden = true;
+  }
+  $('#btn-ask-skip').addEventListener('click', () => {
+    if (!asking) return;
+    const capture = asking;
+    endAsking();
+    capture.kept = capture.labels.flatMap((c, i) => (c == null ? [i] : []));
+    capture.labels = capture.labels.map((c, i) => c ?? capture.guesses[i]);
+    recordCapture(capture);
+  });
 
   // Move on to the next face still to scan, or to Verify once all six are in.
   function advanceAfterCapture() {
@@ -1353,7 +1476,7 @@ export function initApp() {
     resetAutoProgress();
   }
   function autoTick() {
-    if (!autoActive()) {
+    if (!autoActive() || asking) {
       resetAutoProgress();
       return;
     }
@@ -1365,11 +1488,12 @@ export function initApp() {
     }
     if (!samples || !samples.length) return;
 
-    // Confidence: the weakest sticker gates the whole face.
+    // Confidence: the weakest sticker gates the whole face. A colour taught for
+    // this cube counts as sure.
     let minConf = 1;
     if (typeof mod.current.classifyColorDetailed === 'function') {
       for (const rgb of samples) {
-        const c = mod.current.classifyColorDetailed(rgb).confidence;
+        const c = memory.recall(rgb).colour ? 1 : mod.current.classifyColorDetailed(rgb).confidence;
         if (c < minConf) minConf = c;
       }
     }
@@ -1591,6 +1715,7 @@ export function initApp() {
     rescanBase = null;
     viewChanged = false;
     endRescan();
+    endAsking();
     hideCaptureWarning();
     hideTurnCue();
     clearSolutionView();
@@ -1612,6 +1737,7 @@ export function initApp() {
   // Start the next cube: clean slate, back to step 1, camera running once.
   function newCube() {
     undoStack = [];
+    memory.forget(); // the next cube may have different colours
     resetCube();
     showScreen('capture');
     ensureCamera();
@@ -2048,6 +2174,10 @@ export function initApp() {
     // Everything that belongs to the current cube, so the e2e can prove a New
     // cube starts from nothing.
     snapshot: () => ({
+      // A capture held on "what colour is this?": the face, the camera cells asked
+      // about right now, and how many look-alike groups are left.
+      asking: asking ? { face: asking.step.face, cells: asking.groups[0].slice(), groups: asking.groups.length } : null,
+      learned: memory.taughtColours(),
       guideColors: guide ? guide.shownColors() : null,
       turnCue: isHidden($('#turn-cue')) ? null : $('#turn-cue').dataset.turn,
       cameraProblem,
