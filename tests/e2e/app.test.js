@@ -1365,3 +1365,61 @@ test('Skip keeps Solvent\'s guesses and rings them at Verify', async () => {
     server.close();
   }
 });
+
+// ---- Non-standard colors: a knockoff cube (SOLV-21) ------------------------------------------
+
+// Ryan's knockoff 3x3, measured from his photo. Its lime green reads as yellow to
+// the standard classifier; its coral red sits on the red/orange line. Blue wasn't
+// in the photo: a typical knockoff blue.
+const KNOCKOFF_HEX = { W: '#effef2', Y: '#fef300', G: '#73db00', R: '#ff6546', O: '#ff5600', B: '#1e6ee6' };
+
+test('Non-standard colors: a knockoff cube scans by asking once per colour, then reaches Verify as the true cube', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const { context, page, errors } = await openWithCamera(browser, port);
+    const snap = () => page.evaluate(() => window.__solvent.snapshot());
+    await page.click('.size-btn:nth-child(2)');
+    await page.waitForFunction(() => window.__solvent.snapshot().size === '3x3');
+    await page.click('#btn-colors');
+    assert.equal(await page.textContent('#btn-colors'), 'Colors: non-standard');
+    assert.equal((await snap()).nonStandard, true);
+
+    const s = scrambleState(cube3, ['R', 'U', "F'", 'L2', "D'", 'B', 'R2', "U'"]);
+    const truth = size3x3.faceColorsFromState(s);
+    const photos = scanPhotos(size3x3.scanSequence, size3x3.geomFromState(s));
+    const asked = [];
+    for (const { cells } of photos) {
+      await page.evaluate((h) => window.__fakeCam.show(h, 3), cells.map((c) => KNOCKOFF_HEX[c]));
+      await page.waitForTimeout(450);
+      await page.click('#btn-capture');
+      // Answer every question the way Ryan would: the colour those stickers really are.
+      for (let q = 0; q < 10; q++) {
+        const a = (await snap()).asking;
+        if (!a) break;
+        const colours = new Set(a.cells.map((k) => cells[k]));
+        assert.equal(colours.size, 1, `a question groups only look-alike stickers: ${[...colours]}`);
+        const [c] = colours;
+        asked.push(c);
+        await page.click(`#colour-ask-choices [data-color="${c}"]`);
+      }
+      assert.ok(await page.$eval('#capture-warning', (n) => n.hidden), 'no capture warning while colours are being learned');
+    }
+    assert.deepEqual([...asked].sort(), ['B', 'G', 'O', 'R', 'W', 'Y'], 'one question per colour, each colour once');
+    await page.waitForSelector('#screen-review.is-active');
+    await page.waitForSelector('.validation__ok');
+    assert.deepEqual((await snap()).faces, truth, 'the true cube');
+
+    // The switch describes the kind of cube, and is kept for the next one.
+    await page.click('#btn-new-cube');
+    await page.waitForFunction(() => window.__solvent.snapshot().captureIndex === 0);
+    const fresh = await snap();
+    assert.equal(fresh.nonStandard, true);
+    assert.deepEqual(fresh.learned, [], 'but its colours are forgotten');
+    assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

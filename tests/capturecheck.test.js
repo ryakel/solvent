@@ -132,3 +132,18 @@ test('a left turn where the path tips forward is caught, almost always on the sp
   assert.ok(spot / T > 0.85, `2x2: only ${spot}/${T} caught on the spot`);
   assert.ok(missed / T < 0.02, `2x2: ${missed}/${T} never caught during the scan`);
 });
+
+test('with colour checks off (Non-standard colors), only the motion check runs', () => {
+  // A 3x3 whose second face repeats the first face's centre: the centre check
+  // would stop it, but the colour names can't be trusted yet.
+  const rand = rng(101);
+  const g = randomCube(size3x3, cube3, rand);
+  const faces = size3x3.emptyFaces();
+  const s0 = size3x3.scanSequence[0];
+  faces[s0.face] = cameraToFace(s0.cameraToFacelet, photograph(g));
+  const s1 = size3x3.scanSequence[1];
+  faces[s1.face] = faces[s0.face].slice();
+  assert.ok(size3x3.checkCapture(faces, 1), 'normally stopped');
+  assert.equal(size3x3.checkCapture(faces, 1, { colours: false }), null);
+  assert.ok(size3x3.checkCapture(faces, 1, { colours: false, unchanged: true }), 'the motion check still runs');
+});

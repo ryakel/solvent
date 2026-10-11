@@ -7,7 +7,7 @@ import { createRenderer } from './renderer.js';
 import { createGuide } from './guide.js';
 import { cameraToFace, faceToCamera } from '../sizes/scanpath.js';
 import { findRepair, applyRepair, rotateGrid } from '../sizes/repair.js';
-import { calibrateLabels } from '../core/calibrate.js';
+import { calibrateLabels, groupColours } from '../core/calibrate.js';
 import { createColourMemory, lookAlikeGroups } from '../core/colourmemory.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -88,6 +88,13 @@ export function initApp() {
   const memory = createColourMemory();
   // A capture held on that question (see askColours), or null.
   let asking = null;
+  // Non-standard colors (SOLV-21): for a cube whose stickers aren't the standard
+  // shades (a lime "green", a coral "red"). Solvent stops trusting the standard
+  // colour references: it asks the first time it meets each colour, skips the
+  // capture checks that trust colour names, and once every face is in, groups
+  // the whole cube by its own colours. Describes the cube being scanned, but kept
+  // across New cube like Mirror: the same knockoff tends to come back.
+  let nonStandard = false;
   let paintColor = mod.current.colors[0];
   let captureIndex = 0;
   let scanner = null;
@@ -461,7 +468,7 @@ export function initApp() {
       view.push(mod.current.classifyColor(rgb));
       if (!chip) return;
       const r = readSticker(rgb);
-      chip.style.background = mod.current.colorHex[r.guess];
+      chip.style.background = !r.colour && nonStandard ? rgbCss(rgb) : mod.current.colorHex[r.guess];
       chip.dataset.low = r.colour ? 'false' : 'true';
       chip.textContent = r.colour ? '' : '?';
     });
@@ -1227,6 +1234,7 @@ export function initApp() {
   function readSticker(rgb) {
     const m = memory.recall(rgb);
     if (m.colour) return { colour: m.colour, guess: m.colour };
+    if (nonStandard) return { colour: null, guess: m.nearest ?? mod.current.classifyColor(rgb) };
     if (typeof mod.current.classifyColorDetailed !== 'function') {
       const c = mod.current.classifyColor(rgb);
       return { colour: c, guess: c };
@@ -1253,6 +1261,7 @@ export function initApp() {
       lowConf[f] = rotateGrid(lowConf[f], mod.current.gridN, k);
       rawRgb[f] = rotateGrid(rawRgb[f], mod.current.gridN, k);
     }
+    if (nonStandard && allFilled()) groupWholeCube();
 
     // Does this face fit with the ones already captured? If not, hold the step
     // and say why, rather than letting a wrong turn surface six faces later.
@@ -1260,7 +1269,9 @@ export function initApp() {
     lastCaptureView = view;
     viewChanged = false;
     const problem =
-      typeof mod.current.checkCapture === 'function' ? mod.current.checkCapture(faces, captureIndex, { unchanged }) : null;
+      typeof mod.current.checkCapture === 'function'
+        ? mod.current.checkCapture(faces, captureIndex, { unchanged, colours: !nonStandard })
+        : null;
     if (problem) {
       showCaptureWarning(problem, unchanged);
       updateCaptureTarget();
@@ -1271,6 +1282,46 @@ export function initApp() {
     if (rescanning === f) finishRescan();
     else advanceAfterCapture();
   }
+
+  // Non-standard colors: every face is in, so group all the stickers by the
+  // cube's own colours — exactly N² of each, each face's brightness corrected for
+  // (core/calibrate.js groupColours). The user's answers and hand-painted
+  // stickers are ground truth and stay put; a sticker left between two groups
+  // is ringed for a recheck at Verify.
+  function groupWholeCube() {
+    const order = mod.current.faceOrder;
+    const rgbs = [];
+    const labels = [];
+    const faceOf = [];
+    const fixed = [];
+    order.forEach((f, k) => {
+      faces[f].forEach((c, i) => {
+        const rgb = rawRgb[f] && rawRgb[f][i];
+        rgbs.push(rgb || null);
+        labels.push(c);
+        faceOf.push(k);
+        fixed.push(!rgb || memory.answerFor(rgb) != null);
+      });
+    });
+    if (labels.some((c) => c == null)) return;
+    const n2 = mod.current.gridN ** 2;
+    const out = groupColours({ rgbs, labels, faceOf, fixed, colors: mod.current.colors, perColor: n2, seedHex: mod.current.colorHex });
+    const thr = mod.current.confidenceThreshold ?? 0.2;
+    order.forEach((f, k) => {
+      faces[f] = out.labels.slice(k * n2, (k + 1) * n2);
+      lowConf[f] = out.margins.slice(k * n2, (k + 1) * n2).map((m) => m < thr);
+    });
+  }
+
+  function setNonStandard(on) {
+    nonStandard = !!on;
+    const btn = $('#btn-colors');
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(nonStandard));
+      btn.textContent = nonStandard ? 'Colors: non-standard' : 'Colors: standard';
+    }
+  }
+  $('#btn-colors').addEventListener('click', () => setNonStandard(!nonStandard));
 
   // ---- "not sure what colour this is" -----------------------------------------
   // Hold the capture and ask about the stickers Solvent isn't sure of, one
@@ -1493,7 +1544,7 @@ export function initApp() {
     let minConf = 1;
     if (typeof mod.current.classifyColorDetailed === 'function') {
       for (const rgb of samples) {
-        const c = memory.recall(rgb).colour ? 1 : mod.current.classifyColorDetailed(rgb).confidence;
+        const c = nonStandard || memory.recall(rgb).colour ? 1 : mod.current.classifyColorDetailed(rgb).confidence;
         if (c < minConf) minConf = c;
       }
     }
@@ -2178,6 +2229,7 @@ export function initApp() {
       // about right now, and how many look-alike groups are left.
       asking: asking ? { face: asking.step.face, cells: asking.groups[0].slice(), groups: asking.groups.length } : null,
       learned: memory.taughtColours(),
+      nonStandard,
       guideColors: guide ? guide.shownColors() : null,
       turnCue: isHidden($('#turn-cue')) ? null : $('#turn-cue').dataset.turn,
       cameraProblem,

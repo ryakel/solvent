@@ -130,3 +130,80 @@ export function calibrateLabels({ rgbs, labels, colors, perColor, seedHex, fixed
   }
   return current;
 }
+
+// Group stickers into the six colours from the cube's OWN colours — for cubes
+// whose stickers aren't the standard shades (a lime "green", a coral "red"), where
+// fixed references put whole colours on the wrong side of a line.
+//
+// Same balanced assignment as calibrateLabels (exactly perColor stickers per
+// colour, iterated to a fixed point), plus a per-face brightness correction:
+// a face lit more brightly than the others makes every one of its stickers look
+// lighter, so each face gets a gain, estimated from how much brighter its
+// stickers are than their colours' averages, and is divided back out before
+// comparing. Groups take their names from the starting labels (the classifier's
+// reading, or seedHex for a colour nobody was read as), so a lime green still
+// ends up called Green. Names can come out traded between two close colours —
+// harmless for solving, which only needs stickers that match to match.
+//
+//   rgbs, labels, colors, perColor, seedHex, fixed: as calibrateLabels
+//   faceOf: the face index of each sticker
+// Returns { labels, margins }. margins[i] is how clearly sticker i belongs to its
+// group: (d_next - d_own) / (d_next + d_own), ~1 squarely in it, ~0 between two
+// groups. Pinned stickers report 1.
+export function groupColours({ rgbs, labels, colors, perColor, seedHex, faceOf, fixed = [] }) {
+  const pinned = rgbs.map((rgb, i) => !rgb || !!fixed[i]);
+  const faces = [...new Set(faceOf)];
+  const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  // Log luminance: brightness differences between faces are ratios.
+  const logLum = rgbs.map((x) => (x ? Math.log(8 + 0.2126 * x[0] + 0.7152 * x[1] + 0.0722 * x[2]) : 0));
+  const gain = new Map(faces.map((f) => [f, 0])); // log gain per face
+  const slotColor = colors.flatMap((c) => new Array(perColor).fill(c));
+  const BIG = 1e9;
+  let current = labels.slice();
+  let labs = [];
+  let proto = {};
+  for (let round = 0; round < 12; round++) {
+    labs = rgbs.map((x, i) => {
+      if (!x) return null;
+      const k = Math.exp(gain.get(faceOf[i]));
+      return rgbToLab(x.map((v) => Math.min(255, v / k)));
+    });
+    proto = {};
+    for (const c of colors) {
+      const mine = labs.filter((p, i) => p && !pinned[i] && current[i] === c);
+      proto[c] = mine.length
+        ? [0, 1, 2].map((k) => mine.reduce((sum, p) => sum + p[k], 0) / mine.length)
+        : rgbToLab(hexToRgb(seedHex[c]));
+    }
+    const cost = labs.map((p, i) =>
+      slotColor.map((c) => (pinned[i] ? (c === labels[i] ? 0 : BIG) : dist2(p, proto[c])))
+    );
+    const next = hungarian(cost).map((slot) => slotColor[slot]);
+    // Re-estimate each face's gain: log Y = face gain + colour level.
+    const level = {};
+    for (const c of colors) {
+      const idx = rgbs.map((_, i) => i).filter((i) => !pinned[i] && next[i] === c);
+      level[c] = idx.length ? idx.reduce((s, i) => s + logLum[i] - gain.get(faceOf[i]), 0) / idx.length : 0;
+    }
+    const sum = new Map(faces.map((f) => [f, [0, 0]]));
+    rgbs.forEach((_, i) => {
+      if (pinned[i]) return;
+      const acc = sum.get(faceOf[i]);
+      acc[0] += logLum[i] - level[next[i]];
+      acc[1]++;
+    });
+    const raw = faces.map((f) => (sum.get(f)[1] ? sum.get(f)[0] / sum.get(f)[1] : 0));
+    const mean = raw.reduce((a, b) => a + b, 0) / raw.length;
+    faces.forEach((f, k) => gain.set(f, raw[k] - mean));
+    const settled = next.every((c, i) => c === current[i]);
+    current = next;
+    if (settled && round >= 2) break;
+  }
+  const margins = labs.map((p, i) => {
+    if (pinned[i]) return 1;
+    const own = Math.sqrt(dist2(p, proto[current[i]]));
+    const other = Math.min(...colors.filter((c) => c !== current[i]).map((c) => Math.sqrt(dist2(p, proto[c]))));
+    return other + own === 0 ? 1 : (other - own) / (other + own);
+  });
+  return { labels: current, margins };
+}

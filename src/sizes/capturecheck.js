@@ -32,17 +32,19 @@ function pieceFacelets({ faceOrder, gridN, geomFromFaces }) {
     );
 }
 
-// Build the size's check. Returns checkCapture(faces, stepIndex, { unchanged })
+// Build the size's check. Returns checkCapture(faces, stepIndex, { unchanged, colours })
 // -> null when the face fits, else { message } in plain words. `unchanged` is
 // true only when the app KNOWS the camera's picture didn't change since the
-// previous capture; leave it unset when unknown.
+// previous capture; leave it unset when unknown. `colours: false` skips every
+// check that trusts the colour names (centres, pieces) and keeps only the motion
+// check — for a cube whose colours are still being learned (Non-standard colors).
 export function makeCaptureCheck({ faceOrder, gridN, geomFromFaces, scanSequence, hasCenters, faceLabels, colorNames }) {
   const pieces = pieceFacelets({ faceOrder, gridN, geomFromFaces });
   const centre = Math.floor((gridN * gridN) / 2);
   const label = (f) => faceLabels[f];
   const name = (c) => colorNames[c];
 
-  return function checkCapture(faces, stepIndex, { unchanged = false } = {}) {
+  return function checkCapture(faces, stepIndex, { unchanged = false, colours = true } = {}) {
     const f = scanSequence[stepIndex].face;
     const filled = (x) => Array.isArray(faces[x]) && faces[x].length === gridN * gridN && faces[x].every((c) => c != null);
     if (!filled(f)) return null;
@@ -51,6 +53,7 @@ export function makeCaptureCheck({ faceOrder, gridN, geomFromFaces, scanSequence
     if (unchanged && others.length) {
       return { message: `The picture hasn't changed since the last capture — the cube may not have been turned.` };
     }
+    if (!colours) return null;
 
     if (hasCenters) {
       const c = faces[f][centre];
