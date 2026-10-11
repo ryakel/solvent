@@ -649,12 +649,18 @@ export function initApp() {
   // ---- turn cue over the preview ----------------------------------------------
   // Right after a capture moves on, the next turn sweeps across the camera
   // preview, where the user is looking. Mirrored with the preview.
+  //
+  // Straight sweeps ACROSS the face, the way the guide cube moves: turning left,
+  // the front face slides off to the left as the next one comes round; tipping
+  // forward, the top rolls down the front. Never a curved arc in the plane of the
+  // screen: that reads as "spin the face like a steering wheel", the one motion
+  // that leaves the same face toward the camera (SOLV-23).
   const CUE_PATHS = {
-    left: 'M 74 34 C 62 18, 38 18, 26 34',
-    right: 'M 26 34 C 38 18, 62 18, 74 34',
-    down: 'M 64 22 C 79 37, 79 63, 64 78',
-    up: 'M 64 78 C 79 63, 79 37, 64 22',
-    flip: 'M 62 16 C 88 32, 88 68, 62 84',
+    left: 'M 84 50 L 16 50',
+    right: 'M 16 50 L 84 50',
+    down: 'M 50 12 L 50 72',
+    up: 'M 50 72 L 50 12',
+    flip: 'M 50 8 L 50 74',
   };
   let cueTimer = 0;
   function cueKind(turn) {

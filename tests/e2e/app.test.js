@@ -748,6 +748,14 @@ test('the guide cube shows the stickers scanned so far, and the next turn sweeps
       // Exactly the faces captured so far are painted, in their scanned colours.
       assert.deepEqual(s.guideColors, expectedGuide(size2x2, s.faces), `guide colours after capture ${k + 1}`);
       cues.push(s.turnCue);
+      // The arrow is a straight sweep across the face in that direction, never a
+      // curved arc in the plane of the screen (which reads as "spin the face").
+      const d = await page.getAttribute('#turn-cue .turn-cue__line', 'd');
+      const m = d.match(/^M ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+)$/);
+      assert.ok(m, `cue path is a straight line: ${d}`);
+      const [x1, y1, x2, y2] = m.slice(1).map(Number);
+      const dir = { left: x2 < x1 && y1 === y2, right: x2 > x1 && y1 === y2, down: y2 > y1 && x1 === x2, up: y2 < y1 && x1 === x2 };
+      assert.ok(dir[s.turnCue], `cue ${s.turnCue} drawn as ${d}`);
       if (k === 1) {
         // Turning Mirror on re-points the cue already on screen...
         await page.click('#btn-mirror');
