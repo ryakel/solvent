@@ -46,7 +46,15 @@ export function createRenderer(container, opts) {
   scene.add(spin);
   const cubeGroup = new THREE.Group();
   spin.add(cubeGroup);
-  spin.rotation.set(-0.15, -0.5, 0);
+  // The held view (SOLV-25): the cube as the user is told to hold it. Its Front
+  // (+z, the "Toward you" face) squarely toward the viewer, Up (+y) on top,
+  // turned just enough (~21° off the front, ~28° above) that the top and right
+  // side still show, so turns of those layers read.
+  const HELD_VIEW = { x: 0, y: 0.28 };
+  function resetView() {
+    spin.rotation.set(HELD_VIEW.x, HELD_VIEW.y, 0);
+  }
+  resetView();
 
   // Size-adaptive geometry: keep the whole cube ~2 world units across for any N,
   // so 2x2 and 3x3 fill the viewer the same. For N=2 this reproduces the earlier
@@ -282,10 +290,27 @@ export function createRenderer(container, opts) {
     if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
   }
 
+  // Which of the cube's own axes faces the viewer, and which points up on
+  // screen — e.g. { front: [0, 0, 1], top: [0, 1, 0] } in the held view.
+  function facing() {
+    const toLocal = spin.quaternion.clone().invert();
+    const axis = (v) => {
+      const a = [v.x, v.y, v.z];
+      const k = a.map(Math.abs).indexOf(Math.max(...a.map(Math.abs)));
+      return [0, 1, 2].map((i) => (i === k ? Math.sign(a[k]) : 0));
+    };
+    return {
+      front: axis(camera.position.clone().normalize().applyQuaternion(toLocal)),
+      top: axis(camera.up.clone().applyQuaternion(toLocal)),
+    };
+  }
+
   return {
     setGeom,
     animateMove,
     showTurn,
+    resetView,
+    facing,
     turnShown: () => cueInfo,
     resize,
     dispose,

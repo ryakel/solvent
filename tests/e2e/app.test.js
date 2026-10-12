@@ -934,7 +934,7 @@ test('Verify offers a one-tap fix for a face read turned, with Undo', async () =
   }
 });
 
-test('the solution cube shows the move being waited on — layer and direction', async () => {
+test('the Solve screen describes the move just played — arrow, hint, list and counter agree', async () => {
   const { server, port } = await startServer();
   const browser = await launch();
   try {
@@ -952,22 +952,91 @@ test('the solution cube shows the move being waited on — layer and direction',
     await page.waitForSelector('#screen-solution.is-active');
 
     const { moves } = await page.evaluate(() => window.__solvent.getState());
+    const N = moves.length;
     const expect = (name) => {
       const t = size2x2.moveToTurn(name);
       return { axis: t.axis, sign: t.sign, quarters: t.quarters };
     };
-    const shown = () => page.evaluate(() => window.__solvent.turnShown());
-    assert.deepEqual(await shown(), expect(moves[0]), 'move 1 is shown before it is played');
+    const read = () =>
+      page.evaluate(() => ({
+        arrow: window.__solvent.turnShown(),
+        hint: document.querySelector('#move-hint').textContent,
+        counter: document.querySelector('#move-counter').textContent,
+        current: [...document.querySelectorAll('#move-list li')].findIndex((li) => li.dataset.state === 'current'),
+      }));
+    // Everything on screen is about move k (1-based) — the one just played.
+    const assertOn = async (k, why) => {
+      const r = await read();
+      assert.deepEqual(r.arrow, expect(moves[k - 1]), `${why}: arrow`);
+      assert.ok(r.hint.startsWith(`${moves[k - 1]}:`), `${why}: hint "${r.hint}"`);
+      assert.equal(r.counter, `Move ${k} / ${N}`, `${why}: counter`);
+      assert.equal(r.current, k - 1, `${why}: highlighted move`);
+    };
+    const at = (n) => page.waitForFunction((x) => window.__solvent.getState().stepIndex === x, n);
+
+    const start = await read();
+    assert.equal(start.arrow, null, 'nothing played yet, so no arrow');
+    assert.equal(start.current, -1);
+    assert.match(start.hint, /press Next/);
+    assert.ok(await page.$eval('#btn-replay', (b) => b.disabled), 'nothing to replay yet');
+
+    await page.click('#btn-next');
+    await at(1);
+    await assertOn(1, 'after Next');
+    await page.click('#btn-next');
+    await at(2);
+    await assertOn(2, 'after another Next');
+    await page.click(`#move-list li:nth-child(${N})`);
+    await at(N);
+    await assertOn(N, 'tapping the last move');
+    assert.match((await read()).hint, /last move/);
+    await page.click('#btn-prev');
+    await at(N - 1);
+    await assertOn(N - 1, 'Prev');
+
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('Replay plays the current move again in place', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    // Real animation timing, so the replay can be caught while it plays.
+    const context = await browser.newContext({ reducedMotion: 'no-preference' });
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+    await page.evaluate((f) => {
+      window.__solvent.goReview();
+      window.__solvent.setFaces(f);
+    }, scrambledFaces(['R', "U'", 'F2', 'R']));
+    await page.click('#btn-solve');
+    await page.waitForSelector('#screen-solution.is-active');
+    const idle = () => page.waitForFunction(() => !document.querySelector('#btn-replay').disabled);
     await page.click('#btn-next');
     await page.waitForFunction(() => window.__solvent.getState().stepIndex === 1);
-    assert.deepEqual(await shown(), expect(moves[1]), 'then move 2');
-    await page.click(`#move-list li:nth-child(${moves.length})`);
-    await page.waitForFunction((n) => window.__solvent.getState().stepIndex === n, moves.length);
-    assert.equal(await shown(), null, 'nothing to show once solved');
-    await page.click('#btn-prev');
-    await page.waitForFunction((n) => window.__solvent.getState().stepIndex === n, moves.length - 1);
-    assert.deepEqual(await shown(), expect(moves[moves.length - 1]), 'Prev brings the last move back');
+    await idle();
+    const before = await page.evaluate(() => window.__solvent.turnShown());
+    assert.ok(before, 'move 1 is described');
 
+    await page.click('#btn-replay');
+    const during = await page.evaluate(() => ({
+      arrow: window.__solvent.turnShown(),
+      replay: document.querySelector('#btn-replay').disabled,
+      next: document.querySelector('#btn-next').disabled,
+    }));
+    assert.deepEqual(during, { arrow: null, replay: true, next: true }, 'the move animates (arrow hidden, controls held)');
+    await idle();
+    const after = await page.evaluate(() => ({ step: window.__solvent.getState().stepIndex, arrow: window.__solvent.turnShown() }));
+    assert.deepEqual(after, { step: 1, arrow: before }, 'same step, same move described');
+    assert.equal(await page.evaluate(() => window.__solvent.currentFrameSolved()), false);
     assert.deepEqual(errors, []);
     await context.close();
   } finally {
@@ -1417,6 +1486,55 @@ test('Non-standard colors: a knockoff cube scans by asking once per colour, then
     assert.equal(fresh.nonStandard, true);
     assert.deepEqual(fresh.learned, [], 'but its colours are forgotten');
     assert.deepEqual(errors, [], 'console errors: ' + errors.join('\n'));
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+// ---- the solution cube as it's held (SOLV-25) -------------------------------------------------
+
+test('the solution cube opens the way the setup card says to hold it, on both sizes', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext({ reducedMotion: 'reduce' });
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+    const HELD = { front: [0, 0, 1], top: [0, 1, 0] }; // Front toward you, Up on top
+    const solveFaces = async (faces) => {
+      await page.evaluate((f) => {
+        window.__solvent.goReview();
+        window.__solvent.setFaces(f);
+      }, faces);
+      await page.click('#btn-solve');
+      await page.waitForSelector('#screen-solution.is-active');
+    };
+    const facing = () => page.evaluate(() => window.__solvent.viewFacing());
+
+    await solveFaces(scrambledFaces(['R', "U'", 'F2', 'R']));
+    assert.deepEqual(await facing(), HELD, '2x2: Front toward the viewer, Up on top');
+
+    // Spin it away by dragging, then start a new cube: the next solution is held again.
+    const box = await (await page.$('#viewer canvas')).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 180, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.up();
+    assert.notDeepEqual(await facing(), HELD, 'dragging turns it');
+    await page.click('#btn-new');
+    await solveFaces(scrambledFaces(['F', 'R', "U'"]));
+    assert.deepEqual(await facing(), HELD, 'the next solution is held again');
+
+    await page.click('.size-btn:nth-child(2)');
+    await page.waitForFunction(() => window.__solvent.snapshot().size === '3x3');
+    await solveFaces(size3x3.faceColorsFromState(scrambleState(cube3, ['R', 'U', "F'", 'L2'])));
+    assert.deepEqual(await facing(), HELD, '3x3: Front toward the viewer, Up on top');
+    assert.deepEqual(errors, []);
     await context.close();
   } finally {
     await browser.close();

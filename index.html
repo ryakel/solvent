@@ -208,12 +208,14 @@
 
             <ol class="move-list" id="move-list" aria-label="Solution moves"></ol>
 
-            <div class="stepper">
+            <!-- What you use while following along, on one row: back, watch again, next. -->
+            <div class="stepper stepper--main">
               <button class="btn" id="btn-prev" aria-label="Previous move">‹ Prev</button>
-              <button class="btn" id="btn-play" aria-pressed="false" aria-label="Play the solution">▶ Play</button>
+              <button class="btn" id="btn-replay" aria-label="Replay this move" disabled>↺ Replay</button>
               <button class="btn btn--primary" id="btn-next" aria-label="Next move">Next ›</button>
             </div>
             <div class="stepper">
+              <button class="btn" id="btn-play" aria-pressed="false" aria-label="Play the solution">▶ Play</button>
               <button class="btn btn--ghost" id="btn-restart-anim">Reset animation</button>
               <button class="btn btn--ghost" id="btn-copy" aria-label="Copy move list to clipboard">Copy moves</button>
               <button class="btn btn--ghost" id="btn-new">New cube</button>
