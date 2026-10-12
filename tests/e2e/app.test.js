@@ -1492,3 +1492,52 @@ test('Non-standard colors: a knockoff cube scans by asking once per colour, then
     server.close();
   }
 });
+
+// ---- the solution cube as it's held (SOLV-25) -------------------------------------------------
+
+test('the solution cube opens the way the setup card says to hold it, on both sizes', async () => {
+  const { server, port } = await startServer();
+  const browser = await launch();
+  try {
+    const context = await browser.newContext({ reducedMotion: 'reduce' });
+    const errors = [];
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    await page.goto(`http://localhost:${port}${BASE}/`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => !!window.__solvent);
+    const HELD = { front: [0, 0, 1], top: [0, 1, 0] }; // Front toward you, Up on top
+    const solveFaces = async (faces) => {
+      await page.evaluate((f) => {
+        window.__solvent.goReview();
+        window.__solvent.setFaces(f);
+      }, faces);
+      await page.click('#btn-solve');
+      await page.waitForSelector('#screen-solution.is-active');
+    };
+    const facing = () => page.evaluate(() => window.__solvent.viewFacing());
+
+    await solveFaces(scrambledFaces(['R', "U'", 'F2', 'R']));
+    assert.deepEqual(await facing(), HELD, '2x2: Front toward the viewer, Up on top');
+
+    // Spin it away by dragging, then start a new cube: the next solution is held again.
+    const box = await (await page.$('#viewer canvas')).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 180, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.up();
+    assert.notDeepEqual(await facing(), HELD, 'dragging turns it');
+    await page.click('#btn-new');
+    await solveFaces(scrambledFaces(['F', 'R', "U'"]));
+    assert.deepEqual(await facing(), HELD, 'the next solution is held again');
+
+    await page.click('.size-btn:nth-child(2)');
+    await page.waitForFunction(() => window.__solvent.snapshot().size === '3x3');
+    await solveFaces(size3x3.faceColorsFromState(scrambleState(cube3, ['R', 'U', "F'", 'L2'])));
+    assert.deepEqual(await facing(), HELD, '3x3: Front toward the viewer, Up on top');
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

@@ -1841,7 +1841,10 @@ export function initApp() {
       copyBtn.disabled = !solution || solution.moves.length === 0;
       copyBtn.textContent = 'Copy moves';
     }
-    if (renderer) renderer.setGeom(solution.frames[0]);
+    if (renderer) {
+      renderer.setGeom(solution.frames[0]);
+      renderer.resetView(); // the cube as the setup card says to hold it
+    }
     buildMoveList();
     updateSolveReadout();
     const lede = $('#solution-lede');
@@ -2251,6 +2254,7 @@ export function initApp() {
     isPlaying: () => playing,
     // The move the solution cube is currently pointing at, if any.
     turnShown: () => (renderer ? renderer.turnShown() : null),
+    viewFacing: () => (renderer ? renderer.facing() : null),
     // Everything that belongs to the current cube, so the e2e can prove a New
     // cube starts from nothing.
     snapshot: () => ({
