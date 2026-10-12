@@ -1850,7 +1850,7 @@ export function initApp() {
     } else {
       lede.textContent = `Solution in ${solution.moves.length} move${
         solution.moves.length > 1 ? 's' : ''
-      }. Set the cube up as below, then step through with Next.`;
+      }. Set the cube up as below. Next plays each move; copy it on your cube, and Replay shows it again.`;
     }
     renderSetupCard();
     // Carry the mirror-scheme heads-up onto the solution screen too, so the note
@@ -1964,32 +1964,37 @@ export function initApp() {
       list.appendChild(li);
     });
   }
+  // The Solve screen always describes THE MOVE JUST PLAYED (SOLV-24): Next plays
+  // move k, and then the arrow, the hint, the highlighted move and "Move k / N"
+  // all stay on move k while the user copies it on their cube; Replay plays it
+  // again. (Describing the move still to come read as "one step ahead" of the
+  // animation people had just watched.)
   function refreshMoveList() {
     const items = $('#move-list').children;
     for (let i = 0; i < items.length; i++) {
-      items[i].dataset.state = i < stepIndex ? 'done' : i === stepIndex ? 'current' : 'todo';
+      items[i].dataset.state = i < stepIndex - 1 ? 'done' : i === stepIndex - 1 ? 'current' : 'todo';
     }
   }
   function updateSolveReadout() {
-    // The 3D cube shows the move being waited on: which layer, which way.
-    if (renderer) {
-      renderer.showTurn(stepIndex < solution.moves.length ? mod.current.moveToTurn(solution.moves[stepIndex].name) : null);
-    }
-    $('#move-counter').textContent = `Move ${stepIndex} / ${solution.moves.length}`;
+    const total = solution.moves.length;
+    const name = stepIndex > 0 ? solution.moves[stepIndex - 1].name : null;
+    // The 3D cube marks the move just played: which layer, which way.
+    if (renderer) renderer.showTurn(name ? mod.current.moveToTurn(name) : null);
+    $('#move-counter').textContent = `Move ${stepIndex} / ${total}`;
     const hint = $('#move-hint');
-    if (solution.moves.length === 0) {
+    if (total === 0) {
       hint.textContent = 'Already solved.';
-    } else if (stepIndex >= solution.moves.length) {
-      hint.textContent = 'Solved. Six solid faces.';
+    } else if (!name) {
+      hint.textContent = 'Hold the cube as shown, then press Next to watch the first move.';
     } else {
-      const name = solution.moves[stepIndex].name;
-      hint.textContent = `Next — ${name}: ${moveText(name, true)}.`;
+      hint.textContent = `${name}: ${cap(moveText(name, true))}.` + (stepIndex === total ? ' That was the last move: six solid faces.' : '');
     }
     refreshMoveList();
   }
   function updateStepButtons() {
     const total = solution ? solution.moves.length : 0;
     $('#btn-prev').disabled = animating || stepIndex <= 0;
+    $('#btn-replay').disabled = animating || stepIndex <= 0;
     $('#btn-next').disabled = animating || stepIndex >= total;
     updatePlayButton();
   }
@@ -2040,6 +2045,22 @@ export function initApp() {
     }
     stepIndex--;
     updateSolveReadout();
+    updateStepButtons();
+  }
+  // Play the move just played again, in place: back one frame, the same turn,
+  // and the screen stays on that move.
+  async function replayMove() {
+    if (animating || !solution || stepIndex <= 0) return;
+    const sol = solution;
+    animating = true;
+    updateStepButtons();
+    const turn = mod.current.moveToTurn(sol.moves[stepIndex - 1].name);
+    if (renderer) {
+      renderer.setGeom(sol.frames[stepIndex - 1]);
+      await (inFlight = renderer.animateMove(turn, sol.frames[stepIndex], ANIM_MS));
+    }
+    animating = false;
+    if (solution === sol) updateSolveReadout();
     updateStepButtons();
   }
   // Step one turn at a time so the animation reads clearly. A turn already in
@@ -2161,6 +2182,10 @@ export function initApp() {
     stopPlay();
     goPrev();
   });
+  $('#btn-replay').addEventListener('click', () => {
+    stopPlay();
+    replayMove();
+  });
   $('#btn-play').addEventListener('click', togglePlay);
   $('#btn-copy').addEventListener('click', copyMoves);
   $('#btn-restart-anim').addEventListener('click', () => {
@@ -2179,6 +2204,10 @@ export function initApp() {
     if (e.key === 'ArrowLeft') {
       stopPlay();
       goPrev();
+    }
+    if (e.key === 'r' || e.key === 'R') {
+      stopPlay();
+      replayMove();
     }
   });
 

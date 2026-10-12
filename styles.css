@@ -851,6 +851,9 @@ h1 {
 }
 
 .review-actions, .stepper { display: flex; gap: 10px; flex-wrap: wrap; }
+/* Prev · Replay · Next always share one row, even at 320px. */
+.stepper--main { flex-wrap: nowrap; }
+.stepper--main .btn { flex: 1 1 0; min-width: 0; padding-left: 8px; padding-right: 8px; white-space: nowrap; }
 .review-actions { margin-top: 8px; }
 
 /* ---------- solution ---------- */
